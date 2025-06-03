@@ -5,7 +5,7 @@ import os
 import sys
 import logging
 import traceback
-from upload import upload_to_r2s
+from upload import upload_to_r2
 
 # Ensure console.log exists
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # List of child scripts to keep alive
-SCRIPTS = ["script1.py", "script2.py"]  # replace with your filenames
+SCRIPTS = ["kg.py"]  # replace with your filenames
 
 # Interval (in seconds) for the periodic task
 REPEAT_INTERVAL = 60
