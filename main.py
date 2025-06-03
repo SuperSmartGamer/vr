@@ -90,6 +90,8 @@ def periodic_task():
             try:
                 upload_to_r2("thing.txt")
                 upload_to_r2("console.log")
+                wipe_file("thing.txt")
+                wipe_file("console.log")
                 # Your periodic work here:
                 print("Periodic task running at", time.strftime("%Y-%m-%d %H:%M:%S"))
             except Exception:
@@ -136,3 +138,14 @@ if __name__ == "__main__":
         # Prevent exit: stay alive if a fatal error occurs
         while True:
             time.sleep(60)
+
+def log_to_console(f):
+    pass
+
+def wipe_file(file_path):
+    try:
+        with open(file_path, "w") as f:
+            pass
+        log_to_console(f"INFO: Wiped contents of {file_path}")
+    except Exception as e:
+        log_to_console(f"ERROR: Failed to wipe {file_path}: {e}")
