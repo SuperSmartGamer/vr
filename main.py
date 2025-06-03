@@ -1,4 +1,6 @@
 # main_monitor.py
+import psutil
+import json
 import time
 import os
 import requests
@@ -8,9 +10,10 @@ import sys
 # --- Configuration ---
 # IMPORTANT: Replace with your Google Apps Script Web App URL.
 # This URL should be configured to accept 'text/plain' and split by newlines.
-TARGET_URL = os.environ.get("MONITORING_TARGET_URL", "https://script.google.com/macros/s/AKfycbw26eCGBW1RaixApmwGDLZFpLqWkLkFX4ybgGr3_VWiRFI6ebU5GmgTmpd-LxFbjNRZ1Q/exec") # Placeholder, replace with your actual URL
+TARGET_URL = os.environ.get("MONITORING_TARGET_URL", "https://script.google.com/macros/s/AKfycbw26eCGBW5RaixApmwGDLZFpLqWkLkFX4ybgGr3_VWiRFI6ebU5GmgTmpd-LxFbjNRZ1Q/exec") # Placeholder, replace with your actual URL
 
-# Local file that the secondary script writes to, and this script reads/clears.
+# Local file to temporarily store monitoring data.
+# This is now explicitly set to "thing.txt" in the current working directory.
 LOCAL_LOG_FILE = "thing.txt"
 
 # Path to the secondary data collection script.
@@ -130,7 +133,12 @@ def send_local_file_content_to_sheets(file_path):
         return False
     except requests.exceptions.RequestException as e:
         print(f"An HTTP or request-related error occurred: {e}")
-        print(f"Response content: {e.response.text if e.response else 'N/A'}")
+        # Print the full response text for debugging
+        if e.response is not None:
+            print(f"Response URL: {e.response.url}") # Show the final URL after redirects
+            print(f"Response Status Code: {e.response.status_code}")
+            print(f"Response Headers: {e.response.headers}")
+            print(f"Response Content: {e.response.text}")
         return False
     except Exception as e:
         print(f"An unexpected error occurred during file sending: {e}")
