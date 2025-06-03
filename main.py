@@ -32,6 +32,11 @@ SCRIPTS = ["kg.py"]  # replace with your filenames
 # Interval (in seconds) for the periodic task
 REPEAT_INTERVAL = 60
 
+def log_to_console(f):
+    pass
+
+
+
 def install_requirements():
     try:
         subprocess.run(
