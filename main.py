@@ -4,8 +4,7 @@ import time
 import sys
 import logging
 import traceback
-import upload_to_r2 from upload
-
+from upload import upload_to_r2
 # Configure logging to write errors to console.log
 logging.basicConfig(
     filename='console.log',
