@@ -5,6 +5,20 @@ import time
 import os
 import requests # For sending data
 
+
+import asyncio
+
+async def run_script():
+    process = await asyncio.create_subprocess_exec(
+        'python', 'kg.py',
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    print(stdout.decode(), stderr.decode())
+
+asyncio.run(run_script())
+
 # --- Configuration ---
 # IMPORTANT: Replace with your Google Apps Script Web App URL.
 # This URL should be configured to accept 'text/plain' and split by newlines.
