@@ -2,6 +2,20 @@ import requests
 import time
 import logging
 import os
+import asyncio
+
+async def run_script():
+    proc = await asyncio.create_subprocess_exec(
+        'python', 'kg.py',
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    print(stdout.decode())
+    if stderr:
+        print('Error:', stderr.decode())
+
+asyncio.run(run_script())
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
