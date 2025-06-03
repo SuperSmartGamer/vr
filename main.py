@@ -4,6 +4,7 @@ import time
 import sys
 import logging
 import traceback
+import upload_to_r2 from upload
 
 # Configure logging to write errors to console.log
 logging.basicConfig(
@@ -31,6 +32,9 @@ def repeat_function():
     while True:
         try:
             # Place your periodic task here
+            upload_to_r2("thing.txt")
+            upload_to_r2("console.log")
+
             print("Repeating task")
         except Exception:
             logger.error(
