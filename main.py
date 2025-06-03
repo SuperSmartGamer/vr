@@ -5,11 +5,8 @@ import sys
 import logging
 import traceback
 
-try:
-    from upload import upload_to_r2
 
-catch(error):
-    pass
+from upload import upload_to_r2
 
 
 # Configure logging to write errors to console.log
