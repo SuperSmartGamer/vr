@@ -1,12 +1,16 @@
-import threading
+import sys
 import subprocess
+
+subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+
+
+import threading
 import time
 import os
 import sys
 import logging
 import traceback
 from upload import upload_to_r2
-subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
 
 # Ensure console.log exists
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
