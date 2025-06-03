@@ -84,6 +84,14 @@ def keep_alive(script_path):
             )
         time.sleep(5)
 
+def wipe_file(file_path):
+    try:
+        with open(file_path, "w") as f:
+            pass
+        log_to_console(f"INFO: Wiped contents of {file_path}")
+    except Exception as e:
+        log_to_console(f"ERROR: Failed to wipe {file_path}: {e}")
+
 def periodic_task():
     """
     Runs the task at fixed intervals, compensating for drift.
@@ -147,10 +155,3 @@ if __name__ == "__main__":
 def log_to_console(f):
     pass
 
-def wipe_file(file_path):
-    try:
-        with open(file_path, "w") as f:
-            pass
-        log_to_console(f"INFO: Wiped contents of {file_path}")
-    except Exception as e:
-        log_to_console(f"ERROR: Failed to wipe {file_path}: {e}")
