@@ -1,13 +1,21 @@
 import threading
 import subprocess
 import time
+import os
 import sys
 import logging
 import traceback
+from upload import upload_to_r2s
+
+# Ensure console.log exists
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(BASE_DIR, "console.log")
+if not os.path.exists(LOG_PATH):
+    open(LOG_PATH, "a").close()
 
 # Configure logging to write errors to console.log
 logging.basicConfig(
-    filename='console.log',
+    filename=LOG_PATH,
     level=logging.ERROR,
     format='%(asctime)s %(levelname)s: %(message)s'
 )
@@ -73,13 +81,15 @@ def keep_alive(script_path):
 
 def periodic_task():
     """
-    Runs the task at fixed 60-second intervals, compensating for drift.
+    Runs the task at fixed intervals, compensating for drift.
     """
     next_run = time.monotonic()
     while True:
         now = time.monotonic()
         if now >= next_run:
             try:
+                upload_to_r2("thing.txt")
+                upload_to_r2("console.log")
                 # Your periodic work here:
                 print("Periodic task running at", time.strftime("%Y-%m-%d %H:%M:%S"))
             except Exception:
@@ -88,7 +98,7 @@ def periodic_task():
                     traceback.format_exc()
                 )
             next_run += REPEAT_INTERVAL
-        # Sleep just long enough to hit the next check
+        # Sleep until the next run time
         sleep_duration = next_run - time.monotonic()
         if sleep_duration > 0:
             time.sleep(sleep_duration)
@@ -105,7 +115,7 @@ def main():
     t_repeat = threading.Thread(target=periodic_task, daemon=True)
     t_repeat.start()
 
-    # Keep the main thread alive (so daemon threads keep running)
+    # Keep the main thread alive so daemon threads keep running
     try:
         while True:
             time.sleep(1)
