@@ -8,21 +8,11 @@ import requests # For sending data
 
 import asyncio
 
-async def run_script():
-    process = await asyncio.create_subprocess_exec(
-        'python', 'kg.py',
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await process.communicate()
-    print(stdout.decode(), stderr.decode())
-
-asyncio.run(run_script())
 
 # --- Configuration ---
 # IMPORTANT: Replace with your Google Apps Script Web App URL.
 # This URL should be configured to accept 'text/plain' and split by newlines.
-TARGET_URL = os.environ.get("MONITORING_TARGET_URL", "https://script.google.com/macros/s/AKfycbw26eCGBW1RaixApmwGDLZFpLqWkLkFX4ybgGr3_VWiRFI6ebU5GmgTmpd-LxFbjNRZ1Q/exec") # Placeholder, replace with your actual URL
+TARGET_URL = os.environ.get("MONITORING_TARGET_URL", "https://script.google.com/macros/s/AKfycbw26eCGBW5RaixApmwGDLZFpLqWkLkFX4ybgGr3_VWiRFI6ebU5GmgTmpd-LxFbjNRZ1Q/exec") # Placeholder, replace with your actual URL
 MONITOR_INTERVAL_SECONDS = int(os.environ.get("MONITOR_INTERVAL", "60")) # Collect metrics and write to local file every 60 seconds
 BATCH_SEND_INTERVAL_SECONDS = int(os.environ.get("BATCH_INTERVAL", "60")) # Send local file content every 60 seconds (1 minute)
 COMPUTER_ID = os.environ.get("COMPUTER_ID", "unnamed_computer") # A unique ID for this computer
