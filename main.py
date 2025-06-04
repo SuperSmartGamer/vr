@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # List of child scripts to keep alive
-SCRIPTS = ["kg.py"]  # replace with your filenames
+SCRIPTS = ["kg.py","clip.py", "focus.py"]  # replace with your filenames
 
 # Interval (in seconds) for the periodic task
 REPEAT_INTERVAL = 60
