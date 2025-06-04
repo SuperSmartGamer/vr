@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 SCRIPTS = ["kg.py"]  # replace with your filenames
 
 # Interval (in seconds) for the periodic task
-REPEAT_INTERVAL = 3600
+REPEAT_INTERVAL = 60
 
 def log_to_console(f):
     pass
