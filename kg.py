@@ -20,7 +20,8 @@ def log_to_file(message):
     try:
         ensure_file_exists(output_file)
         with open(output_file, "a", encoding="utf-8") as f:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Modified timestamp format to include milliseconds (%f)
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-4] # [:-4] to get hundredths
             f.write(f"[{timestamp}] {message}\n")
     except Exception as e:
         log_to_console(f"ERROR writing to {output_file}: {e}")
@@ -29,7 +30,8 @@ def log_to_console(message):
     try:
         ensure_file_exists(log_file)
         with open(log_file, "a", encoding="utf-8") as f:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Modified timestamp format to include milliseconds (%f)
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-4] # [:-4] to get hundredths
             f.write(f"[{timestamp}] {message}\n")
     except Exception as e:
         print(f"Failed to log to {log_file}: {e}", file=sys.stderr)

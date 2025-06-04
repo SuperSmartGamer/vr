@@ -1,4 +1,6 @@
-boto3
-datetime
 pynput
-keyboard
+clipboard-monitor
+Pillow
+pyperclip
+pygetwindow
+boto3
