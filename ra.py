@@ -12,23 +12,24 @@ SCRIPTS_DIR = os.path.join(MAIN_DIR, "scripts")
 LOG_FILE = os.path.join(MAIN_DIR, "console.log") # Main log file for all script output
 SERVICE_PATH = "/etc/systemd/system/tmate-persistent.service" # Systemd service unit file
 
-# Cloudflare R2 Credentials (FILLED IN WITH YOUR PROVIDED INFO)
-R2_ACCESS_KEY = 'db8efca097d2506714901db06ea81b97'
-R2_SECRET_KEY = '4a873df3ad2fdd9be894f779461fb2ab9def4202ea50afc42e9ecf029498d0fa'
-R2_ACCOUNT_ID = 'fd5b99900fc2700f1f893f9ee5d52c07'
-R2_BUCKET_NAME = 'my-bucket'
+# Cloudflare R2 Credentials (IMPORTANT: REPLACE WITH YOUR ACTUAL R2 API TOKEN)
+R2_ACCESS_KEY = 'db8efca097d2506714901db06ea81b97' # Your R2 Access Key ID
+R2_SECRET_KEY = '4a873df3ad2fdd9be894f779461fb2ab9def4202ea50afc42e9ecf029498d0fa' # Your R2 Secret Access Key
+R2_ACCOUNT_ID = 'fd5b99900fc2700f1f893f9ee5d52c07' # Your Cloudflare Account ID (found in R2 endpoint URL)
+R2_BUCKET_NAME = 'my-bucket' # Replace with your R2 bucket name
 R2_ENDPOINT_URL = f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com'
 R2_UPLOAD_KEY = 'tmate.txt' # The name of the file to be uploaded to your R2 bucket
 
 # --- Logging Helper ---
 def log(message, level="INFO"):
-    """Appends a timestamped message to the log file."""
+    """Appends a timestamped message to the main log file (console.log)."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     full_message = f"[{timestamp}] [{level}] {message}"
     try:
         with open(LOG_FILE, "a") as log_f:
             log_f.write(f"{full_message}\n")
     except Exception:
+        # Fallback to stderr if logging to file fails (shouldn't happen with root)
         print(f"FATAL: Could not write to log file. {full_message}", file=sys.stderr)
 
 # --- File Operations ---
@@ -59,6 +60,7 @@ def install_apt_packages(packages):
     log(f"Attempting to install apt packages: {', '.join(packages)}...")
     try:
         log("Running apt update...")
+        # Use a timeout for apt update to prevent hanging
         result = subprocess.run(["apt", "update"], check=True, capture_output=True, text=True, timeout=300)
         log(f"apt update STDOUT:\n{result.stdout.strip()}", level="DEBUG")
         if result.stderr: log(f"apt update STDERR:\n{result.stderr.strip()}", level="WARN")
@@ -174,7 +176,8 @@ def log_local(msg, level="INFO"):
         pass
 
 def run_command_and_log(cmd, description, check=True, timeout=None):
-    log_local(f"Executing: {{' '.join(cmd)}} ({description})")
+    # CORRECTED LINE for the NameError: using double curly braces for {{description}}
+    log_local(f"Executing: {{' '.join(cmd)}} ({{{{description}}}}) ")
     try:
         result = subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
         log_local(f"{{description}} STDOUT:\\n{{result.stdout.strip()}}", level="DEBUG")
@@ -353,9 +356,6 @@ WantedBy=multi-user.target # Start when the system reaches multi-user runlevel
 
 # === Main Execution Logic ===
 if __name__ == "__main__":
-    # Ensure sys is imported for fallback logging
-    import sys
-
     log("--- Starting setup_tmate_access.py ---", level="INFO")
 
     # 1. Ensure necessary directories exist
