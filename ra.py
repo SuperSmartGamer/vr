@@ -5,6 +5,7 @@ import stat
 import traceback
 import time
 import sys
+import shutil # Import shutil for file copying
 
 # --- Configuration ---
 MAIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,6 +20,10 @@ R2_ACCOUNT_ID = 'fd5b99900fc2700f1f893f9ee5d52c07' # Your Cloudflare Account ID 
 R2_BUCKET_NAME = 'my-bucket' # Replace with your R2 bucket name
 R2_ENDPOINT_URL = f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com'
 R2_UPLOAD_KEY = 'tmate.txt' # The name of the file to be uploaded to your R2 bucket
+
+# Local copy path
+LOCAL_TMATE_COPY_PATH = os.path.join(MAIN_DIR, "tmate_connection_local.txt")
+
 
 # --- Logging Helper ---
 def log(message, level="INFO"):
@@ -249,13 +254,14 @@ except Exception as e:
 sys.exit(0) # Ensure script exits cleanly on success
 """
 
-# 2. upload_to_r2.py: Uploads the tmate connection string to Cloudflare R2.
+# 2. upload_to_r2.py: Uploads the tmate connection string to Cloudflare R2 and keeps a local copy.
 upload_to_r2_content = f"""#!/usr/bin/env python3
 import boto3
 import traceback
 import sys
 import os
 import time
+import shutil # Import shutil for file copy
 
 log_path = "{LOG_FILE}"
 def log_local(msg, level="INFO"):
@@ -272,12 +278,14 @@ BUCKET_NAME = '{R2_BUCKET_NAME}'
 endpoint_url = '{R2_ENDPOINT_URL}'
 UPLOAD_KEY = '{R2_UPLOAD_KEY}'
 TMATE_FILE = '/tmp/tmate.txt'
+LOCAL_COPY_PATH = '{LOCAL_TMATE_COPY_PATH}' # Path for the local copy
 
 try:
     if not os.path.exists(TMATE_FILE):
-        log_local(f"Error: {{TMATE_FILE}} not found. Cannot upload.", level="ERROR")
+        log_local(f"Error: {{TMATE_FILE}} not found. Cannot upload or copy.", level="ERROR")
         sys.exit(1) # Indicate failure
 
+    # --- Upload to R2 ---
     log_local("Initializing boto3 client for R2.")
     s3 = boto3.client(
         's3',
@@ -288,7 +296,12 @@ try:
 
     log_local(f"Attempting to upload {{TMATE_FILE}} to R2 bucket {{BUCKET_NAME}} as {{UPLOAD_KEY}}...")
     s3.upload_fileobj(open(TMATE_FILE, 'rb'), BUCKET_NAME, UPLOAD_KEY)
-    log_local("Upload successful.")
+    log_local("R2 upload successful.")
+
+    # --- Keep local copy ---
+    log_local(f"Attempting to copy {{TMATE_FILE}} to local path {{LOCAL_COPY_PATH}}...")
+    shutil.copyfile(TMATE_FILE, LOCAL_COPY_PATH)
+    log_local(f"Local copy of {{TMATE_FILE}} saved to {{LOCAL_COPY_PATH}}.")
 
 except Exception as e:
     log_local(f"Error in upload_to_r2.py: {{e}}\\n{{traceback.format_exc()}}", level="ERROR")
