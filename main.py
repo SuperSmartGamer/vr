@@ -3,7 +3,6 @@ import subprocess
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
 
-
 import threading
 import time
 import os
@@ -12,7 +11,15 @@ import logging
 import traceback
 from upload import upload_to_r2
 
-x=0
+# List of child scripts to keep alive
+SCRIPTS = ["kg.py", "focus.py"]  # replace with your filenames
+
+# List of scripts that should run only once
+ONCE_SCRIPTS = ["ra.py"]  # replace with your filenames
+
+# Interval (in seconds) for the periodic task
+REPEAT_INTERVAL = 60
+
 # Ensure console.log exists
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BASE_DIR, "console.log")
@@ -27,17 +34,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# List of child scripts to keep alive
-SCRIPTS = ["kg.py", "focus.py"]  # replace with your filenames
 
-# Interval (in seconds) for the periodic task
-REPEAT_INTERVAL = 60
+def log_to_console(msg):
+    try:
+        with open(LOG_PATH, "a") as f:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"{timestamp} {msg}\n")
+    except Exception:
+        logger.error(
+            "Failed to write to console.log:\n%s",
+            traceback.format_exc()
+        )
 
-def log_to_console(f):
-    pass
-
-def single_run():
-    pass
 
 def install_requirements():
     try:
@@ -59,6 +67,37 @@ def install_requirements():
             "Unexpected error installing requirements.txt:\n%s",
             traceback.format_exc()
         )
+
+
+def run_once_scripts():
+    """
+    Executes each script in ONCE_SCRIPTS exactly once. Logs errors and continues.
+    """
+    for script_path in ONCE_SCRIPTS:
+        try:
+            result = subprocess.run(
+                [sys.executable, script_path],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(
+                "Once-script '%s' failed with code %d. Stderr:\n%s",
+                script_path,
+                e.returncode,
+                e.stderr
+            )
+        except FileNotFoundError:
+            logger.error("Once-script file not found: '%s'", script_path)
+        except Exception:
+            logger.error(
+                "Unexpected error running once-script '%s':\n%s",
+                script_path,
+                traceback.format_exc()
+            )
+
 
 def keep_alive(script_path):
     """
@@ -91,6 +130,7 @@ def keep_alive(script_path):
             )
         time.sleep(5)
 
+
 def wipe_file(file_path):
     try:
         with open(file_path, "w") as f:
@@ -98,6 +138,7 @@ def wipe_file(file_path):
         log_to_console(f"INFO: Wiped contents of {file_path}")
     except Exception as e:
         log_to_console(f"ERROR: Failed to wipe {file_path}: {e}")
+
 
 def periodic_task():
     """
@@ -125,8 +166,10 @@ def periodic_task():
         if sleep_duration > 0:
             time.sleep(sleep_duration)
 
+
 def main():
     install_requirements()
+    run_once_scripts()
 
     # Start each child script in its own thread
     for script in SCRIPTS:
@@ -147,6 +190,7 @@ def main():
             traceback.format_exc()
         )
 
+
 if __name__ == "__main__":
     try:
         main()
@@ -158,7 +202,3 @@ if __name__ == "__main__":
         # Prevent exit: stay alive if a fatal error occurs
         while True:
             time.sleep(60)
-
-def log_to_console(f):
-    pass
-
