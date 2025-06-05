@@ -328,8 +328,8 @@ while true; do
     python3 "$TMATE_SCRIPT_PY"
     TMATE_STATUS=$?
     if [ $TMATE_STATUS -ne 0 ]; then
-      echo "$(date) - [tmate_loop.sh] ERROR - tmate_script.py failed with exit code $TMATE_STATUS. Retrying in 60 seconds." >> "$LOG_FILE"
-      sleep 60 # Shorter sleep if tmate script failed
+      echo "$(date) - [tmate_loop.sh] ERROR - tmate_script.py failed with exit code $TMATE_STATUS. Retrying in 1 second." >> "$LOG_FILE"
+      sleep 1 # Check every second
       continue
     fi
 
@@ -337,8 +337,8 @@ while true; do
     python3 "$UPLOAD_R2_PY"
     UPLOAD_STATUS=$?
     if [ $UPLOAD_STATUS -ne 0 ]; then
-      echo "$(date) - [tmate_loop.sh] ERROR - upload_to_r2.py failed with exit code $UPLOAD_STATUS. Retrying in 60 seconds." >> "$LOG_FILE"
-      sleep 60 # Shorter sleep if upload script failed
+      echo "$(date) - [tmate_loop.sh] ERROR - upload_to_r2.py failed with exit code $UPLOAD_STATUS. Retrying in 1 second." >> "$LOG_FILE"
+      sleep 1 # Check every second
       continue
     fi
     echo "$(date) - [tmate_loop.sh] INFO - New tmate session established and string uploaded." >> "$LOG_FILE"
@@ -346,7 +346,7 @@ while true; do
     echo "$(date) - [tmate_loop.sh] INFO - Tmate session appears active." >> "$LOG_FILE"
   fi
   
-  sleep 300 # Check every 5 minutes (adjust as needed for faster/slower reconnections)
+  sleep 1 # Check every second
 done
 """
 
