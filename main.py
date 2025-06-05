@@ -12,6 +12,7 @@ import logging
 import traceback
 from upload import upload_to_r2
 
+x=0
 # Ensure console.log exists
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BASE_DIR, "console.log")
@@ -35,7 +36,8 @@ REPEAT_INTERVAL = 60
 def log_to_console(f):
     pass
 
-
+def single_run():
+    pass
 
 def install_requirements():
     try:
