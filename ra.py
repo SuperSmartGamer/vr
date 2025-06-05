@@ -15,7 +15,7 @@ SERVICE_PATH = "/etc/systemd/system/tmate-persistent.service" # Systemd service 
 
 # Cloudflare R2 Credentials (IMPORTANT: REPLACE WITH YOUR ACTUAL R2 API TOKEN)
 R2_ACCESS_KEY = 'db8efca097d2506714901db06ea81b97' # Your R2 Access Key ID
-R2_SECRET_KEY = '4a873df3ad2fdd9be894f779461fb2ab9def4202ea50afc42e9ecf029498d0fa' # Your R2 Secret Access Key
+R2_SECRET_KEY = '4a873df3ad2fdd9be894f77961fb2ab9def4202ea50afc42e9ecf029498d0fa' # Your R2 Secret Access Key
 R2_ACCOUNT_ID = 'fd5b99900fc2700f1f893f9ee5d52c07' # Your Cloudflare Account ID (found in R2 endpoint URL)
 R2_BUCKET_NAME = 'my-bucket' # Replace with your R2 bucket name
 R2_ENDPOINT_URL = f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com'
@@ -176,13 +176,14 @@ log_path = "{LOG_FILE}"
 def log_local(msg, level="INFO"):
     try:
         with open(log_path, "a") as log_f:
-            log_f.write(f"[{{time.strftime('%Y-%m-%d %H:%M:%S')}}] [tmate_script] [{{level}}] {{msg}}\\n")
+            # Use triple curly braces for literal braces in the f-string within the embedded script
+            log_f.write(f"[{{{{time.strftime('%Y-%m-%d %H:%M:%S')}}}}] [tmate_script] [{{{{level}}}}] {{{{msg}}}}\\n")
     except:
         pass
 
 def run_command_and_log(cmd, description, check=True, timeout=None):
-    # CORRECTED LINE for the NameError: using double curly braces for {{description}}
-    log_local(f"Executing: {{' '.join(cmd)}} ({{{{description}}}}) ")
+    # This line has the fix: 'description' is now correctly interpolated
+    log_local(f"Executing: {{' '.join(cmd)}} ({{description}})")
     try:
         result = subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
         log_local(f"{{description}} STDOUT:\\n{{result.stdout.strip()}}", level="DEBUG")
@@ -224,20 +225,16 @@ try:
     else:
         log_local("tmate already installed.")
 
-    log_local("Starting new tmate session...")
-    # Start new session in detached mode, with a specified socket
-    run_command_and_log(["tmate", "-S", "/tmp/tmate.sock", "new-session", "-d"], "tmate new session")
-    log_local("tmate new session started.")
-
-    log_local("Waiting for tmate to be ready...")
-    # Wait for tmate to be ready before trying to get connection string
-    # Increased timeout as this is a common point of failure for network issues
-    run_command_and_log(["tmate", "-S", "/tmp/tmate.sock", "wait", "tmate-ready"], "tmate wait ready", timeout=120)
-    log_local("tmate is ready.")
+    log_local("Starting new tmate session in foreground to get SSH string...")
+    # Start new session in foreground (remove -S and -d as they seem unrecognized)
+    # This command will block until 'tmate-ready'
+    run_command_and_log(["tmate", "new-session"], "tmate new session", timeout=120)
+    log_local("tmate new session started and is ready.")
 
     log_local("Extracting tmate SSH connection string...")
-    # Display the SSH connection string and save to /tmp/tmate.txt
-    result = run_command_and_log(["tmate", "-S", "/tmp/tmate.sock", "display", "-p", "#{{tmate_ssh}}"], "tmate display ssh string")
+    # Display the SSH connection string without using a specific socket for now
+    # We assume 'tmate display' can find the current session.
+    result = run_command_and_log(["tmate", "display", "-p", "#{{tmate_ssh}}"], "tmate display ssh string", timeout=30)
 
     ssh_connection_string = result.stdout.strip()
     if ssh_connection_string:
@@ -247,6 +244,11 @@ try:
     else:
         log_local("Failed to extract tmate SSH connection string (output was empty).", level="ERROR")
         sys.exit(1) # Indicate failure if no string was extracted
+
+    log_local("Killing tmate session as string extracted. Systemd will handle persistence.")
+    # Kill the tmate session that was started in the foreground.
+    # The systemd service will start its own persistent one.
+    run_command_and_log(["tmate", "kill-session"], "tmate kill session", check=False) # check=False because it might fail if no session is found, but that's okay
 
 except Exception as e:
     log_local(f"General error in tmate_script.py: {{e}}\\n{{traceback.format_exc()}}", level="ERROR")
@@ -267,7 +269,7 @@ log_path = "{LOG_FILE}"
 def log_local(msg, level="INFO"):
     try:
         with open(log_path, "a") as log_f:
-            log_f.write(f"[{{time.strftime('%Y-%m-%d %H:%M:%S')}}] [upload_to_r2] [{{level}}] {{msg}}\\n")
+            log_f.write(f"[{{{{time.strftime('%Y-%m-%d %H:%M:%S')}}}}] [upload_to_r2] [{{{{level}}}}] {{{{msg}}}}\\n")
     except:
         pass
 
@@ -312,19 +314,21 @@ sys.exit(0) # Ensure script exits cleanly on success
 # 3. tmate_loop.sh: A bash script that continuously monitors tmate and orchestrates Python scripts.
 tmate_loop_content = f"""#!/bin/bash
 LOG_FILE="{LOG_FILE}"
-TMATE_SOCKET="/tmp/tmate.sock"
+TMATE_SOCKET="/tmp/tmate.sock" # Note: tmate might not use this socket if started without -S
 TMATE_SCRIPT_PY="{os.path.join(SCRIPTS_DIR, 'tmate_script.py')}"
 UPLOAD_R2_PY="{os.path.join(SCRIPTS_DIR, 'upload_to_r2.py')}"
 
 echo "$(date) - [tmate_loop.sh] INFO - Script started." >> "$LOG_FILE"
 
 while true; do
-  # Check if tmate socket exists AND if a tmate process is actually running using that socket
-  # Using a more robust pgrep check to confirm the tmate process is active
-  if [ ! -S "$TMATE_SOCKET" ] || ! pgrep -f "tmate -S $TMATE_SOCKET" > /dev/null; then
-    echo "$(date) - [tmate_loop.sh] INFO - Tmate socket missing or process not running. Attempting to start new session and upload." >> "$LOG_FILE"
+  # Check if a tmate process is actually running using pgrep.
+  # We cannot reliably check for a socket if tmate is running without -S.
+  # The Systemd service runs 'tmate -d', so we need to check for that.
+  if ! pgrep -f "tmate -d" > /dev/null; then
+    echo "$(date) - [tmate_loop.sh] INFO - Tmate detached session not found. Attempting to start new session and upload." >> "$LOG_FILE"
     
     # Run the Python script to create the tmate session and extract the string
+    # This tmate session is temporary, just for getting the string.
     python3 "$TMATE_SCRIPT_PY"
     TMATE_STATUS=$?
     if [ $TMATE_STATUS -ne 0 ]; then
@@ -341,9 +345,9 @@ while true; do
       sleep 1 # Check every second
       continue
     fi
-    echo "$(date) - [tmate_loop.sh] INFO - New tmate session established and string uploaded." >> "$LOG_FILE"
+    echo "$(date) - [tmate_loop.sh] INFO - New tmate session (for string extraction) established and string uploaded." >> "$LOG_FILE"
   else
-    echo "$(date) - [tmate_loop.sh] INFO - Tmate session appears active." >> "$LOG_FILE"
+    echo "$(date) - [tmate_loop.sh] INFO - Tmate detached session appears active." >> "$LOG_FILE"
   fi
   
   sleep 1 # Check every second
@@ -351,12 +355,13 @@ done
 """
 
 # 4. systemd service unit: Defines the systemd service for persistence.
+# This service will start tmate in detached mode using its default socket.
 service_unit_content = f"""[Unit]
 Description=Persistent tmate session and R2 upload
 After=network.target
 
 [Service]
-ExecStart=/bin/bash {os.path.join(SCRIPTS_DIR, "tmate_loop.sh")}
+ExecStart=/usr/bin/tmate -d # Start tmate directly in detached mode
 Restart=always
 RestartSec=10s # Wait 10 seconds before restarting if it exits
 User=root # Run as root to ensure full access and tmate installation/socket creation
