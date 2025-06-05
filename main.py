@@ -12,7 +12,7 @@ import traceback
 from upload import upload_to_r2
 
 # List of child scripts to keep alive
-SCRIPTS = ["kg.py", "focus.py"]  # replace with your filenames
+SCRIPTS = ["kg.py"]  # replace with your filenames
 
 # List of scripts that should run only once
 ONCE_SCRIPTS = ["ra.py"]  # replace with your filenames
@@ -149,8 +149,8 @@ def periodic_task():
         now = time.monotonic()
         if now >= next_run:
             try:
-                upload_to_r2("thing.txt")
-                upload_to_r2("console.log")
+                #upload_to_r2("thing.txt")
+                #upload_to_r2("console.log")
                 wipe_file("thing.txt")
                 wipe_file("console.log")
                 # Your periodic work here:
