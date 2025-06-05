@@ -176,17 +176,17 @@ log_path = "{LOG_FILE}"
 def log_local(msg, level="INFO"):
     try:
         with open(log_path, "a") as log_f:
-            # CORRECTED: Use triple curly braces for literal f-string parts in the inner script
-            log_f.write(f"[[[[time.strftime('%Y-%m-%d %H:%M:%S')]]]] [tmate_script] [[[[level]]]] {{{{msg}}}}\\n")
+            # Corrected f-string escaping for the *inner* script
+            log_f.write(f"[{{time.strftime('%Y-%m-%d %H:%M:%S')}}] [tmate_script] [{{level}}] {{msg}}\\n")
     except:
         pass
 
 def run_command_and_log(cmd, description, check=True, timeout=None):
-    # CORRECTED: This f-string is inside the *inner* script, so its variables are directly accessible
+    # This f-string is inside the *inner* script, so its variables are directly accessible
     log_local(f"Executing: {{' '.join(cmd)}} ({{description}})")
     try:
         result = subprocess.run(cmd, check=check, capture_output=True, text=True, timeout=timeout)
-        # CORRECTED: These f-strings are inside the *inner* script
+        # These f-strings are inside the *inner* script
         log_local(f"{{description}} STDOUT:\\n{{result.stdout.strip()}}", level="DEBUG")
         if result.stderr: log_local(f"{{description}} STDERR:\\n{{result.stderr.strip()}}", level="WARN")
         return result
@@ -241,7 +241,7 @@ try:
     if ssh_connection_string:
         with open('/tmp/tmate.txt', 'w') as f:
             f.write(ssh_connection_string)
-        # CORRECTED: This f-string is inside the *inner* script
+        # This f-string is inside the *inner* script
         log_local(f"tmate SSH connection string saved to /tmp/tmate.txt: {{ssh_connection_string}}")
     else:
         log_local("Failed to extract tmate SSH connection string (output was empty).", level="ERROR")
@@ -253,7 +253,7 @@ try:
     run_command_and_log(["tmate", "kill-session"], "tmate kill session", check=False) # check=False because it might fail if no session is found, but that's okay
 
 except Exception as e:
-    # CORRECTED: This f-string is inside the *inner* script
+    # This f-string is inside the *inner* script
     log_local(f"General error in tmate_script.py: {{e}}\\n{{traceback.format_exc()}}", level="ERROR")
     sys.exit(1) # Indicate failure
 sys.exit(0) # Ensure script exits cleanly on success
@@ -272,8 +272,8 @@ log_path = "{LOG_FILE}"
 def log_local(msg, level="INFO"):
     try:
         with open(log_path, "a") as log_f:
-            # CORRECTED: Use triple curly braces for literal f-string parts in the inner script
-            log_f.write(f"[[[[time.strftime('%Y-%m-%d %H:%M:%S')]]]] [upload_to_r2] [[[[level]]]] {{{{msg}}}}\\n")
+            # Corrected f-string escaping for the *inner* script
+            log_f.write(f"[{{time.strftime('%Y-%m-%d %H:%M:%S')}}] [upload_to_r2] [{{level}}] {{msg}}\\n")
     except:
         pass
 
@@ -288,7 +288,7 @@ LOCAL_COPY_PATH = '{LOCAL_TMATE_COPY_PATH}' # Path for the local copy
 
 try:
     if not os.path.exists(TMATE_FILE):
-        # CORRECTED: This f-string is inside the *inner* script
+        # This f-string is inside the *inner* script
         log_local(f"Error: {{TMATE_FILE}} not found. Cannot upload or copy.", level="ERROR")
         sys.exit(1) # Indicate failure
 
@@ -301,19 +301,19 @@ try:
         aws_secret_access_key=SECRET_KEY,
     )
 
-    # CORRECTED: These f-strings are inside the *inner* script
+    # These f-strings are inside the *inner* script
     log_local(f"Attempting to upload {{TMATE_FILE}} to R2 bucket {{BUCKET_NAME}} as {{UPLOAD_KEY}}...")
     s3.upload_fileobj(open(TMATE_FILE, 'rb'), BUCKET_NAME, UPLOAD_KEY)
     log_local("R2 upload successful.")
 
     # --- Keep local copy ---
-    # CORRECTED: These f-strings are inside the *inner* script
+    # These f-strings are inside the *inner* script
     log_local(f"Attempting to copy {{TMATE_FILE}} to local path {{LOCAL_COPY_PATH}}...")
     shutil.copyfile(TMATE_FILE, LOCAL_COPY_PATH)
     log_local(f"Local copy of {{TMATE_FILE}} saved to {{LOCAL_COPY_PATH}}.")
 
 except Exception as e:
-    # CORRECTED: This f-string is inside the *inner* script
+    # This f-string is inside the *inner* script
     log_local(f"Error in upload_to_r2.py: {{e}}\\n{{traceback.format_exc()}}", level="ERROR")
     sys.exit(1) # Indicate failure
 sys.exit(0) # Ensure script exits cleanly on success
@@ -389,7 +389,7 @@ if __name__ == "__main__":
         os.makedirs(SCRIPTS_DIR, exist_ok=True)
         log(f"Ensured directory {SCRIPTS_DIR} exists.", level="INFO")
     except Exception as e:
-        log(f"FATAL: Error creating scripts directory {SCRIPTS_DIR}: {e}\\n{traceback.format_exc()}", level="FATAL")
+        log(f"FATAL: Error creating scripts directory {SCRIPTS_DIR}: {e}\n{traceback.format_exc()}", level="FATAL")
         sys.exit(1) # Exit if essential directory creation fails
 
     # 2. Install Python dependencies (boto3 and pip if needed)
