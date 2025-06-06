@@ -110,7 +110,7 @@ def run_command(cmd, check_output=False, shell=False, sudo=False):
         return False
     except subprocess.TimeoutExpired as e:
         log_error(f"Command '{cmd_str}' timed out after {e.timeout} seconds.")
-        if e.stdout: log_error(f"Stdout (partial): {e.stdout.strip()}")
+        if e.stdout: log_message(f"Stdout (partial): {e.stdout.strip()}") # Use message for partial output
         if e.stderr: log_error(f"Stderr (partial): {e.stderr.strip()}")
         return False
     except Exception as e:
@@ -304,133 +304,108 @@ def configure_tmate_keybindings():
 
 def get_current_tmate_session_info():
     """
-    Attempts to get the current tmate session's links using 'tmate display -p'.
-    Returns (links, process_id) or (None, None).
+    Checks for an existing tmate session process and returns its PID if found.
+    Does NOT attempt to retrieve session links using tmate commands here, as
+    start_new_tmate_session will handle capturing output directly.
+    Returns (None, process_id) or (None, None).
     """
-    log_message("Checking for existing tmate session using 'tmate display -p'...")
-    session_links = {}
-
+    log_message("Checking for existing tmate session process...")
     try:
-        # Get SSH read-only link
-        ssh_ro_link = run_command(["tmate", "display", "-p", "#{tmate_ssh_ro}"], check_output=True)
-        if ssh_ro_link and "ssh ro-" in ssh_ro_link: # Basic validation
-            session_links['ssh_ro'] = ssh_ro_link.strip()
-            log_message(f"Found SSH Read-Only link: {session_links['ssh_ro']}")
+        pid_output = run_command(["pgrep", "-f", "tmate -S"], check_output=True)
+        if pid_output:
+            tmate_pid = int(pid_output.splitlines()[0])
+            log_message(f"Found active tmate server with PID: {tmate_pid}")
+            return None, tmate_pid # Return PID, links will be retrieved by start_new_tmate_session
         else:
-            log_warning(f"Did not find SSH Read-Only link. Raw output: '{ssh_ro_link}'")
-
-        # Get SSH link
-        ssh_link = run_command(["tmate", "display", "-p", "#{tmate_ssh}"], check_output=True)
-        if ssh_link and "ssh " in ssh_link and "ro-" not in ssh_link: # Basic validation
-            session_links['ssh'] = ssh_link.strip()
-            log_message(f"Found SSH link: {session_links['ssh']}")
-        else:
-            log_warning(f"Did not find SSH link. Raw output: '{ssh_link}'")
-
-        # Get Web read-only link
-        web_ro_link = run_command(["tmate", "display", "-p", "#{tmate_web_ro}"], check_output=True)
-        if web_ro_link and "https://tmate.io/t/ro-" in web_ro_link: # Basic validation
-            session_links['web_ro'] = web_ro_link.strip()
-            log_message(f"Found Web Read-Only link: {session_links['web_ro']}")
-        else:
-            log_warning(f"Did not find Web Read-Only link. Raw output: '{web_ro_link}'")
-
-        # Get Web link
-        web_link = run_command(["tmate", "display", "-p", "#{tmate_web}"], check_output=True)
-        if web_link and "https://tmate.io/t/" in web_link and "ro-" not in web_link: # Basic validation
-            session_links['web'] = web_link.strip()
-            log_message(f"Found Web link: {session_links['web']}")
-        else:
-            log_warning(f"Did not find Web link. Raw output: '{web_link}'")
-
-        if session_links:
-            log_message("Active tmate session found and links extracted.")
-            pid_output = run_command(["pgrep", "-f", "tmate -S"], check_output=True)
-            if pid_output:
-                tmate_pid = int(pid_output.splitlines()[0])
-                return session_links, tmate_pid
-            else:
-                log_warning("Could not determine PID of the active tmate server specific to this service using pgrep.")
-                return session_links, None
-        else:
-            log_message("Did not find valid session links using 'tmate display -p'.")
+            log_message("No active tmate server process found with 'pgrep'.")
             return None, None
-
     except Exception as e:
-        log_error(f"Error checking for tmate session with 'display -p': {e}", include_traceback=True)
+        log_error(f"Error checking for tmate process with 'pgrep': {e}", include_traceback=True)
         return None, None
+
 
 def start_new_tmate_session():
     """
-    Starts a new tmate session.
+    Starts a new tmate session and attempts to capture its initial output
+    to extract session links.
     Returns (links, process_id) or (None, None).
     """
-    log_message("Attempting to start a new tmate session...")
+    log_message("Attempting to start a new tmate session and capture links from its direct output...")
     process = None
+    tmate_output_buffer = ""
+    session_links = {}
+
     try:
-        # Launch tmate without -F, it should daemonize
-        # Redirect stdout/stderr to PIPE only for the initial launch output, then close.
-        # We'll rely on tmate show-messages (or display -p) for status.
+        # Launch tmate without any arguments. It should print links to stdout/stderr.
         process = subprocess.Popen(
-            ['tmate'], # No -F or -f
+            ['tmate'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,
+            bufsize=1, # Line-buffered output
             env=os.environ.copy()
         )
-        log_message(f"tmate process launched with PID: {process.pid}. Allowing it to daemonize and connect...")
+        log_message(f"tmate process launched with PID: {process.pid}.")
 
-        # Read any immediate output from tmate's launch for debugging.
-        # This is not for session links, but for startup errors.
-        initial_stdout, initial_stderr = process.communicate(timeout=10) # Read output and close pipes
-        if initial_stdout:
-            log_message(f"tmate initial stdout (from Popen.communicate):\n{initial_stdout.strip()}")
-        if initial_stderr:
-            log_error(f"tmate initial stderr (from Popen.communicate):\n{initial_stderr.strip()}")
-        
-        # Check if tmate process exited immediately (e.g., due to a fatal error)
-        if process.returncode is not None:
-            log_error(f"tmate process launched with PID {process.pid} exited immediately with code {process.returncode}.")
+        start_time = time.time()
+        # Read both stdout and stderr line by line for session links
+        # Give it up to 60 seconds to provide links and exit or daemonize
+        while time.time() - start_time < 60:
+            stdout_line = process.stdout.readline()
+            stderr_line = process.stderr.readline()
+
+            if stdout_line:
+                tmate_output_buffer += stdout_line
+                log_message(f"tmate stdout: {stdout_line.strip()}")
+            if stderr_line:
+                tmate_output_buffer += stderr_line
+                log_error(f"tmate stderr: {stderr_line.strip()}") # Log stderr as error
+
+            # Attempt to parse links from all captured output
+            web_ro_match = re.search(r"readonly access web session: (https://tmate\.io/t/ro-[a-zA-Z0-9]+)", tmate_output_buffer)
+            ssh_ro_match = re.search(r"ssh session read only: (ssh ro-[a-zA-Z0-9]+@\S+)", tmate_output_buffer)
+            web_match = re.search(r"web session: (https://tmate\.io/t/[a-zA-Z0-9]+)", tmate_output_buffer)
+            ssh_match = re.search(r"ssh session: (ssh [a-zA-Z0-9]+@\S+)", tmate_output_buffer)
+
+            if web_ro_match: session_links['web_ro'] = web_ro_match.group(1)
+            if ssh_ro_match: session_links['ssh_ro'] = ssh_ro_match.group(1)
+            if web_match: session_links['web'] = web_match.group(1)
+            if ssh_match: session_links['ssh'] = ssh_match.group(1)
+
+            if session_links and all(key in session_links for key in ['web', 'ssh', 'web_ro', 'ssh_ro']):
+                log_message("All expected tmate session links found in output.")
+                break # All links found, exit loop
+
+            if process.poll() is not None:
+                # Process exited, and we haven't found all links. Read remaining output.
+                remaining_stdout, remaining_stderr = process.communicate()
+                tmate_output_buffer += remaining_stdout + remaining_stderr
+                if remaining_stdout: log_message(f"tmate final stdout: {remaining_stdout.strip()}")
+                if remaining_stderr: log_error(f"tmate final stderr: {remaining_stderr.strip()}")
+                log_error(f"tmate process exited with code {process.returncode} before all links were found.")
+                break # Process exited, no more output
+
+            time.sleep(1) # Wait a bit before reading again
+
+        # Final check for links after loop
+        if session_links and all(key in session_links for key in ['web', 'ssh', 'web_ro', 'ssh_ro']):
+            log_message("New tmate session started and all links retrieved from direct output.")
+            return session_links, process.pid
+        else:
+            log_error("Failed to find all required tmate session links in direct output after timeout.")
+            log_error(f"Full tmate captured output (for analysis):\n{tmate_output_buffer}")
+            if process.poll() is None: # If process is still running, try to kill it
+                log_warning(f"tmate process {process.pid} is still running but did not provide links. Attempting to terminate.")
+                process.terminate()
+                process.wait(timeout=5)
+                if process.poll() is None:
+                    process.kill()
+            kill_cmd = f"pkill -f 'tmate -S'" # Ensure any lingering server is killed
+            run_command([kill_cmd], shell=True, sudo=True)
             return None, None
-
-
-        # Wait for tmate to start and connect to its servers
-        time.sleep(5) 
-
-        # Now, try to get the messages via tmate show-messages (or display -p), as tmate should be running in background.
-        for attempt in range(1, 16): # Try for up to 15 attempts (approx 30 seconds total)
-            log_message(f"Attempt {attempt}/15: Checking for tmate session links via 'tmate display -p'.")
-            links, pid = get_current_tmate_session_info()
-            if links and pid:
-                log_message("Successfully retrieved session links via 'tmate display -p'.")
-                return links, pid
-            
-            # Check if a new tmate process unexpectedly exited during the waiting period
-            # (Note: 'process' here refers to the initially launched Popen object)
-            if process.poll() is not None and process.returncode != 0:
-                log_error(f"tmate process launched with PID {process.pid} exited prematurely during link retrieval with code {process.returncode}.")
-                # stderr was already read via communicate()
-                return None, None
-
-            time.sleep(2) # Wait before trying again
-
-        log_error("Timeout waiting for tmate session links after multiple attempts. tmate might not be starting or not outputting links reliably.")
-        # Attempt to kill any lingering tmate process if links not found after multiple attempts
-        kill_cmd = f"pkill -f 'tmate -S'"
-        run_command([kill_cmd], shell=True, sudo=True)
-        return None, None
 
     except FileNotFoundError:
         log_error("The 'tmate' command was not found. Please ensure it's installed correctly and in PATH.")
-        return None, None
-    except subprocess.TimeoutExpired as e:
-        log_error(f"tmate process initial communication timed out: {e}", include_traceback=True)
-        if process and process.poll() is None:
-            process.terminate()
-            process.wait(timeout=5)
-            if process.poll() is None:
-                process.kill()
         return None, None
     except Exception as e:
         log_error(f"An unexpected error occurred while trying to start a new tmate session: {e}", include_traceback=True)
@@ -520,25 +495,30 @@ def run_monitor_loop():
 
     while True:
         try:
-            current_links, discovered_pid = get_current_tmate_session_info()
-
-            if current_links and discovered_pid:
-                if tmate_pid is None or tmate_pid != discovered_pid:
-                    log_message(f"Detected new or confirmed existing tmate session (PID: {discovered_pid}).")
-                    tmate_pid = discovered_pid
-                    write_shs_file(current_links)
+            # First, check if tmate is ALREADY running. If so, get its PID and continue monitoring.
+            _, existing_pid = get_current_tmate_session_info() # Only interested in PID here
+            if existing_pid:
+                log_message(f"Existing tmate session (PID: {existing_pid}) detected. Will use this session.")
+                tmate_pid = existing_pid
+                # Attempt to get links from existing session. If it fails, start a new one.
+                temp_links, _ = start_new_tmate_session_internal_get_links_only() # This is a new internal function to get links from existing server
+                if temp_links:
+                    write_shs_file(temp_links)
                     upload_urls_to_cloud()
                 else:
-                    log_message(f"tmate session (PID: {tmate_pid}) still active. No changes to links. Periodically re-uploading.")
-                    upload_urls_to_cloud()
-            else:
-                log_warning("No active tmate session found or links could not be retrieved. Attempting to start a new one.")
+                    log_warning("Failed to retrieve links from existing tmate session. Will attempt to start a new one.")
+                    tmate_pid = None # Reset PID as existing session might be problematic
+
+            if tmate_pid is None: # No existing session, or existing session links could not be retrieved
+                log_warning("No active tmate session found or links could not be retrieved from an existing one. Attempting to start a new one.")
+                
+                # Proactively kill any lingering tmate -S processes before starting a new one
                 kill_cmd = f"pkill -f 'tmate -S'"
                 if not run_command([kill_cmd], shell=True, sudo=True):
-                    log_warning("pkill command encountered an unexpected error. Continuing anyway to attempt new tmate session.")
+                    log_warning("pkill command encountered an unexpected error during pre-start cleanup. Continuing anyway to attempt new tmate session.")
                 time.sleep(2)
 
-                new_links, new_pid = start_new_tmate_session()
+                new_links, new_pid = start_new_tmate_session() # This is the main function that launches tmate and captures its output
                 if new_links and new_pid:
                     log_message(f"Successfully started new tmate session (PID: {new_pid}).")
                     tmate_pid = new_pid
@@ -547,11 +527,59 @@ def run_monitor_loop():
                 else:
                     log_error("Failed to start a new tmate session. Will retry after delay.")
                     tmate_pid = None
+            else:
+                log_message(f"tmate session (PID: {tmate_pid}) confirmed active. Periodically re-uploading links.")
+                # Periodically re-fetch and re-upload links to ensure freshness and persistence
+                re_fetched_links, _ = start_new_tmate_session_internal_get_links_only()
+                if re_fetched_links:
+                    write_shs_file(re_fetched_links)
+                    upload_urls_to_cloud()
+                else:
+                    log_error("Failed to re-fetch links from active tmate session. This might indicate an issue with the running tmate server. Will try to restart on next loop.")
+                    tmate_pid = None # Force restart on next loop iteration
 
         except Exception as e:
             log_error(f"An unhandled error occurred in the main monitor loop: {e}", include_traceback=True)
 
-        time.sleep(30)
+        time.sleep(30) # Check every 30 seconds
+
+def start_new_tmate_session_internal_get_links_only():
+    """
+    Internal helper function to attempt to get links from an *already running* tmate server.
+    This uses 'tmate display -p' and is called when a tmate process is believed to be active.
+    Returns (links, pid) or (None, None).
+    """
+    log_message("Attempting to retrieve links from an existing tmate server using 'tmate display -p'.")
+    session_links = {}
+    try:
+        ssh_ro_link = run_command(["tmate", "display", "-p", "#{tmate_ssh_ro}"], check_output=True)
+        if ssh_ro_link and "ssh ro-" in ssh_ro_link: session_links['ssh_ro'] = ssh_ro_link.strip()
+
+        ssh_link = run_command(["tmate", "display", "-p", "#{tmate_ssh}"], check_output=True)
+        if ssh_link and "ssh " in ssh_link and "ro-" not in ssh_link: session_links['ssh'] = ssh_link.strip()
+
+        web_ro_link = run_command(["tmate", "display", "-p", "#{tmate_web_ro}"], check_output=True)
+        if web_ro_link and "https://tmate.io/t/ro-" in web_ro_link: session_links['web_ro'] = web_ro_link.strip()
+
+        web_link = run_command(["tmate", "display", "-p", "#{tmate_web}"], check_output=True)
+        if web_link and "https://tmate.io/t/" in web_link and "ro-" not in web_link: session_links['web'] = web_link.strip()
+
+        if session_links and all(key in session_links for key in ['web', 'ssh', 'web_ro', 'ssh_ro']):
+            log_message("Successfully retrieved all expected tmate session links via 'tmate display -p'.")
+            pid_output = run_command(["pgrep", "-f", "tmate -S"], check_output=True)
+            if pid_output:
+                tmate_pid = int(pid_output.splitlines()[0])
+                return session_links, tmate_pid
+            else:
+                log_warning("Could not determine PID for existing tmate server after retrieving links. This is unexpected.")
+                return session_links, None
+        else:
+            log_warning("Could not retrieve all required tmate session links using 'tmate display -p' from existing server.")
+            return None, None
+
+    except Exception as e:
+        log_error(f"Error fetching links from existing tmate session using 'display -p': {e}", include_traceback=True)
+        return None, None
 
 def install_systemd_service():
     """
@@ -673,7 +701,8 @@ WantedBy=multi-user.target
         
         if existing_service_content == service_content.strip():
             log_message(f"Systemd service file '{service_file_path}' is already up to date. Skipping write.")
-            return True # Service file is good, no further action needed for this function
+            # Important: return True here because the service file is good and doesn't need re-enabling/restarting
+            return True 
         else:
             log_message(f"Existing systemd service file '{service_file_path}' differs from desired content. Updating...")
             file_needs_update = True
