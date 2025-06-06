@@ -145,7 +145,7 @@ def install_tmate_system_wide():
 
     log_message(f"tmate not found system-wide. Attempting to install to {TMATE_INSTALL_DIR} (requires sudo)...")
 
-    if not run_command(["mkdir", "-p", TMATE_INSTALL_TRUE], sudo=True):
+    if not run_command(["mkdir", "-p", TMATE_INSTALL_DIR], sudo=True):
         log_error(f"Failed to create directory {TMATE_INSTALL_DIR}. Check permissions or disk space.")
         return False
 
@@ -269,7 +269,6 @@ def get_current_tmate_session_info():
     """
     log_message("Checking for existing tmate session...")
     try:
-        # Removed -f flag for tmate, relying on its default behavior
         tmate_list_output = run_command(["tmate", "show-messages"], check_output=True)
         if tmate_list_output is False:
             log_message("Failed to get tmate show-messages output. No active session or command error.")
@@ -290,7 +289,6 @@ def get_current_tmate_session_info():
 
         if session_links:
             log_message("Active tmate session found and links extracted.")
-            # Adjusted pgrep to match just 'tmate -S' in the full command line
             pid_output = run_command(["pgrep", "-f", "tmate -S"], check_output=True)
             if pid_output:
                 tmate_pid = int(pid_output.splitlines()[0])
@@ -314,9 +312,9 @@ def start_new_tmate_session():
     log_message("Attempting to start a new tmate session...")
     process = None
     try:
-        # Removed -f flag for tmate, relying on its default behavior
+        # Removed -F flag to see if tmate starts without it and still outputs to stdout
         process = subprocess.Popen(
-            ['tmate', '-F'],
+            ['tmate'], # Removed '-F'
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -329,63 +327,31 @@ def start_new_tmate_session():
         session_links = {}
         
         log_message("Reading output from new tmate process...")
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                if process.poll() is not None:
-                    break
-                time.sleep(0.1)
-                continue
-            
-            tmate_output_buffer += line
-            log_message(f"Raw line from new tmate session: {line.strip()}")
+        # Give tmate a moment to potentially daemonize or print initial messages
+        time.sleep(5) 
 
-            if "web session:" in line and "ssh session:" in line:
-                log_message("Detected session link patterns in tmate output.")
-                break
+        # Now, try to get the messages via tmate show-messages, as -F is removed.
+        # This loop will try to get the output from tmate show-messages repeatedly
+        # until links are found or a timeout occurs.
+        for _ in range(15): # Try for up to 15 * 2 seconds = 30 seconds
+            links, pid = get_current_tmate_session_info()
+            if links and pid:
+                log_message("Successfully retrieved session links via 'tmate show-messages'.")
+                return links, pid
+            log_message("Waiting for tmate session to become active and provide links...")
+            time.sleep(2) # Wait before trying again
 
-            if time.time() - start_time > 90:
-                log_error("Timeout waiting for new tmate session links in output. Terminating process.")
-                process.terminate()
-                process.wait(timeout=10)
-                if process.poll() is None:
-                    process.kill()
-                return None, None
-
-        time.sleep(2)
-
-        if process.poll() is not None:
-            stderr_output = process.stderr.read()
-            log_error(f"New tmate session process exited prematurely with code {process.returncode}.")
-            if stderr_output:
-                log_error(f"tmate stderr on premature exit: {stderr_output}")
-            return None, None
-
-        web_ro_match = re.search(r"readonly access web session: (https://tmate\.io/t/ro-[a-zA-Z0-9]+)", tmate_output_buffer)
-        ssh_ro_match = re.search(r"ssh session read only: (ssh ro-[a-zA-Z0-9]+@\S+)", tmate_output_buffer)
-        web_match = re.search(r"web session: (https://tmate\.io/t/[a-zA-Z0-9]+)", tmate_output_buffer)
-        ssh_match = re.search(r"ssh session: (ssh [a-zA-Z0-9]+@\S+)", tmate_output_buffer)
-
-        if web_ro_match: session_links['web_ro'] = web_ro_match.group(1)
-        if ssh_ro_match: session_links['ssh_ro'] = ssh_ro_match.group(1)
-        if web_match: session_links['web'] = web_match.group(1)
-        if ssh_match: session_links['ssh'] = ssh_match.group(1)
-
-        if not session_links:
-            log_error("Could not find new tmate session links in the final output buffer after process initiation.")
-            log_error(f"Full new tmate session output buffer (for analysis):\n{tmate_output_buffer}")
-            kill_cmd = f"pkill -f 'tmate -S'"
-            run_command([kill_cmd], shell=True, sudo=True)
-            return None, None
-
-        log_message("New tmate session started and links retrieved.")
-        return session_links, process.pid
+        log_error("Timeout waiting for tmate session links after removing -F flag. tmate might not be starting or not outputting links reliably.")
+        # Attempt to kill any lingering tmate process if links not found after multiple attempts
+        kill_cmd = f"pkill -f 'tmate -S'"
+        run_command([kill_cmd], shell=True, sudo=True)
+        return None, None
 
     except FileNotFoundError:
         log_error("The 'tmate' command was not found. Please ensure it's installed correctly and in PATH.")
         return None, None
     except Exception as e:
-        log_error(f"An unexpected error occurred while starting new tmate session: {e}", include_traceback=True)
+        log_error(f"An unexpected error occurred while starting new tmate session (after removing -F): {e}", include_traceback=True)
         if process and process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
@@ -486,9 +452,7 @@ def run_monitor_loop():
             else:
                 log_warning("No active tmate session found or links could not be retrieved. Attempting to start a new one.")
                 kill_cmd = f"pkill -f 'tmate -S'"
-                # The run_command call now internally handles pkill exit code 1 as INFO
                 if not run_command([kill_cmd], shell=True, sudo=True):
-                    # This branch will only be hit if pkill genuinely fails for another reason (e.g., permissions, bad syntax for other errors)
                     log_warning("pkill command encountered an unexpected error. Continuing anyway to attempt new tmate session.")
                 time.sleep(2)
 
@@ -599,7 +563,7 @@ User=root
 WorkingDirectory={SERVICE_BASE_DIR}
 StandardOutput=journal
 StandardError=journal
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin # Ensure tmate is in PATH for root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/usr/bin:/sbin:/bin # Ensure tmate is in PATH for root
 
 [Install]
 WantedBy=multi-user.target
