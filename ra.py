@@ -42,6 +42,7 @@ def log_warning(message):
     """Prints a warning message to stdout."""
     print(f"[WARNING] {time.strftime('%Y-%m-%d %H:%M:%S')} {message}")
 
+
 def log_error(message, include_traceback=False):
     """Prints an error message to stderr, optionally with traceback."""
     print(f"[ERROR] {time.strftime('%Y-%m-%d %H:%M:%S')} {message}", file=sys.stderr)
@@ -283,7 +284,7 @@ def get_current_tmate_session_info():
         if session_links:
             log_message("Active tmate session found and links extracted.")
             # Adjusted pgrep to also remove -f flag from the pattern match
-            pid_output = run_command(["pgrep", "-f", f"tmate -S"], check_output=True)
+            pid_output = run_command(["pgrep", f"tmate -S"], check_output=True)
             if pid_output:
                 tmate_pid = int(pid_output.splitlines()[0])
                 return session_links, tmate_pid
@@ -308,7 +309,7 @@ def start_new_tmate_session():
     try:
         # Removed -f flag, relying on tmate's default behavior to find /root/.tmate.conf
         process = subprocess.Popen(
-            ['tmate', '-F'],
+            ['tmate'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
