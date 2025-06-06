@@ -49,7 +49,10 @@ def log_error(message, include_traceback=False):
         print(traceback.format_exc(), file=sys.stderr)
 
 def run_command(cmd, check_output=False, shell=False, sudo=False):
-    """Helper to run shell commands, with enhanced error logging."""
+    """
+    Helper to run shell commands, with enhanced error logging.
+    Gracefully handles pkill returning exit code 1 (no process found).
+    """
     full_cmd = ["sudo"] + cmd if sudo else cmd
     cmd_str = ' '.join(full_cmd) if isinstance(full_cmd, list) else full_cmd
     log_message(f"Executing: {cmd_str}")
@@ -63,10 +66,15 @@ def run_command(cmd, check_output=False, shell=False, sudo=False):
             log_message(f"Command '{cmd_str}' completed successfully.")
             return True
     except subprocess.CalledProcessError as e:
-        log_error(f"Command '{cmd_str}' failed with exit code {e.returncode}.")
-        if e.stdout: log_error(f"Stdout: {e.stdout.strip()}")
-        if e.stderr: log_error(f"Stderr: {e.stderr.strip()}")
-        return False
+        # Special handling for pkill returning 1 (no process found)
+        if "pkill" in cmd_str and e.returncode == 1:
+            log_message(f"Command '{cmd_str}' completed with exit code 1 (no matching processes found, which is often expected).")
+            return True # Treat as success in this specific case
+        else:
+            log_error(f"Command '{cmd_str}' failed with exit code {e.returncode}.")
+            if e.stdout: log_error(f"Stdout: {e.stdout.strip()}")
+            if e.stderr: log_error(f"Stderr: {e.stderr.strip()}")
+            return False
     except FileNotFoundError:
         log_error(f"Command '{full_cmd[0]}' not found. Is it installed and in PATH?")
         return False
@@ -137,7 +145,7 @@ def install_tmate_system_wide():
 
     log_message(f"tmate not found system-wide. Attempting to install to {TMATE_INSTALL_DIR} (requires sudo)...")
 
-    if not run_command(["mkdir", "-p", TMATE_INSTALL_DIR], sudo=True):
+    if not run_command(["mkdir", "-p", TMATE_INSTALL_TRUE], sudo=True):
         log_error(f"Failed to create directory {TMATE_INSTALL_DIR}. Check permissions or disk space.")
         return False
 
@@ -478,8 +486,10 @@ def run_monitor_loop():
             else:
                 log_warning("No active tmate session found or links could not be retrieved. Attempting to start a new one.")
                 kill_cmd = f"pkill -f 'tmate -S'"
-                if run_command([kill_cmd], shell=True, sudo=True) is False:
-                    log_warning("pkill command failed or found no matching tmate processes to kill. Continuing anyway.")
+                # The run_command call now internally handles pkill exit code 1 as INFO
+                if not run_command([kill_cmd], shell=True, sudo=True):
+                    # This branch will only be hit if pkill genuinely fails for another reason (e.g., permissions, bad syntax for other errors)
+                    log_warning("pkill command encountered an unexpected error. Continuing anyway to attempt new tmate session.")
                 time.sleep(2)
 
                 new_links, new_pid = start_new_tmate_session()
