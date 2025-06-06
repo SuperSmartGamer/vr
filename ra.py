@@ -272,6 +272,22 @@ def install_tmate_system_wide():
             except OSError as e:
                 log_warning(f"Failed to remove temporary extraction directory {extract_dir}: {e}")
 
+    # --- New: Post-installation verification ---
+    log_message("Verifying tmate installation...")
+    # Check if tmate is found in PATH
+    which_tmate_output = run_command(["which", "tmate"], check_output=True)
+    if not which_tmate_output:
+        log_error("tmate command not found in PATH after installation.")
+        return False
+    log_message(f"tmate found at: {which_tmate_output}")
+
+    # Check if tmate is executable and responds to --version
+    tmate_version_output = run_command(["tmate", "--version"], check_output=True)
+    if not tmate_version_output:
+        log_error("tmate command failed to execute or get version after installation.")
+        return False
+    log_message(f"tmate version: {tmate_version_output.splitlines()[0]}") # Take first line
+
     if is_tmate_installed_system_wide():
         log_message("tmate installed successfully system-wide!")
         return True
@@ -350,7 +366,7 @@ def get_current_tmate_session_info():
 
 def start_new_tmate_session():
     """
-    Starts a new tmate session in detached mode and attempts to capture its initial output
+    Starts a new tmate session and attempts to capture its initial output
     to extract session links.
     Returns (links, process_id) or (None, None).
     """
@@ -370,7 +386,7 @@ def start_new_tmate_session():
         # It should typically daemonize itself after printing the links.
         with open(temp_stdout_file, 'w') as stdout_f, open(temp_stderr_file, 'w') as stderr_f:
             process = subprocess.Popen(
-                ['tmate'], # Most basic launch command
+                ['tmate'], # Most basic launch command, relies on default behavior to print links
                 stdout=stdout_f,
                 stderr=stderr_f,
                 text=True,
@@ -770,7 +786,7 @@ WantedBy=multi-user.target
             escaped_content = service_content.strip().replace('"', '\\"')
             write_cmd = f"echo \"{escaped_content}\" | sudo tee {service_file_path}"
             if not run_command(write_cmd, shell=True):
-                log_error(f"Failed to write service file to {service_file_path} even with 'sudo tee'. Check sudo privileges or disk issues.")
+                log_error(f"Failed to write service file to {service_file_path} even with 'sudo tee'. Check system permissions or disk issues.")
                 return False
             log_message(f"Service file '{service_file_path}' written via 'sudo tee'.")
         except Exception as e:
