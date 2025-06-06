@@ -168,12 +168,31 @@ def install_tmate_system_wide():
     """
     Installs tmate by downloading the latest static binary to a system-wide location.
     This function REQUIRES sudo privileges to run successfully.
+    Forces a clean installation.
     """
-    if is_tmate_installed_system_wide():
-        log_message("tmate is already installed system-wide. Skipping installation.")
-        return True
+    log_message(f"Ensuring tmate is correctly installed system-wide. Proactively removing any existing installation (requires sudo)...")
 
-    log_message(f"tmate not found system-wide. Attempting to install to {TMATE_INSTALL_DIR} (requires sudo)...")
+    # 1. Kill any running tmate processes
+    log_message("Killing any existing tmate processes...")
+    run_command(["pkill", "-f", "tmate"], sudo=True) # Kill all tmate instances
+    time.sleep(1) # Give time for processes to terminate
+
+    # 2. Remove existing tmate binary and directories
+    tmate_bin_path = os.path.join(TMATE_INSTALL_DIR, "tmate")
+    if os.path.exists(tmate_bin_path):
+        log_message(f"Removing existing tmate binary at {tmate_bin_path}...")
+        if not run_command(["rm", "-f", tmate_bin_path], sudo=True):
+            log_error(f"Failed to remove existing tmate binary at {tmate_bin_path}.")
+            return False
+    
+    # Remove any tmate socket directories (e.g., /tmp/tmate-*)
+    log_message("Cleaning up old tmate socket directories from /tmp/...")
+    # Use 'find' for robustness
+    if not run_command(["find", "/tmp", "-maxdepth", "1", "-type", "d", "-name", "tmate-*", "-exec", "rm", "-rf", "{}", "+"], sudo=True):
+        log_warning("Failed to clean up some tmate temporary directories (might not exist or permissions).")
+
+
+    log_message(f"Proceeding with fresh tmate installation to {TMATE_INSTALL_DIR}...")
 
     if not run_command(["mkdir", "-p", TMATE_INSTALL_DIR], sudo=True):
         log_error(f"Failed to create directory {TMATE_INSTALL_DIR}. Check permissions or disk space.")
@@ -199,8 +218,13 @@ def install_tmate_system_wide():
         log_error(f"An unexpected error occurred during tmate download: {e}", include_traceback=True)
         return False
 
-    log_message(f"Extracting '{archive_name}'...")
+    log_message(f"Extracting '{archive_name}' to '{extract_dir}'...")
     try:
+        # Ensure extract_dir is clean before extraction
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        os.makedirs(extract_dir)
+
         if archive_name.endswith(".tar.xz"):
             with tarfile.open(download_path, "r:xz") as tar:
                 tar.extractall(path=extract_dir)
@@ -219,6 +243,7 @@ def install_tmate_system_wide():
 
         if tmate_executable_path and os.path.exists(tmate_executable_path):
             final_tmate_path = os.path.join(TMATE_INSTALL_DIR, "tmate")
+            # Using shutil.move with sudo via run_command
             if not run_command(["mv", tmate_executable_path, final_tmate_path], sudo=True):
                 log_error(f"Failed to move tmate executable from {tmate_executable_path} to {final_tmate_path}.")
                 return False
@@ -227,7 +252,7 @@ def install_tmate_system_wide():
                 return False
             log_message(f"tmate executable moved to '{final_tmate_path}' and made executable.")
         else:
-            log_error("Could not find 'tmate' executable within the extracted archive.")
+            log_error(f"Could not find 'tmate' executable within the extracted archive '{extract_dir}'. Contents: {os.listdir(extract_dir) if os.path.exists(extract_dir) else 'directory not found'}")
             return False
     except (OSError, tarfile.ReadError, tarfile.FilterError) as e:
         log_error(f"Failed to extract or move tmate: {e}", include_traceback=True)
@@ -292,7 +317,7 @@ def configure_tmate_keybindings():
             return True
         except IOError as e:
             log_error(f"Failed to write tmate configuration file {TMATE_CONFIG_FILE} directly via Python: {e}", include_traceback=True)
-            log_warning("Attempting fallback to 'sudo tee' for tmate config creation.")
+            log_warning("Attempting fallback to 'sudo tee'.")
             escaped_content = TMATE_CONFIG_CONTENT.strip().replace('"', '\\"')
             write_cmd = f"echo \"{escaped_content}\" | sudo tee {TMATE_CONFIG_FILE}"
             if not run_command(write_cmd, shell=True):
@@ -329,7 +354,7 @@ def start_new_tmate_session():
     to extract session links.
     Returns (links, process_id) or (None, None).
     """
-    log_message("Attempting to start a new tmate session in detached mode and capture links...")
+    log_message("Attempting to start a new tmate session and capture links from its direct output...")
     process = None
     tmate_output_buffer = ""
     session_links = {}
@@ -337,23 +362,24 @@ def start_new_tmate_session():
     temp_stderr_file = "/tmp/tmate_stderr.log"
 
     try:
-        # Launch tmate in detached mode (-d) and redirect its output to temporary files.
-        # This prevents the Python script from blocking while tmate runs.
-        # We also create a new session here explicitly.
+        # Ensure temporary files are clean before starting
+        if os.path.exists(temp_stdout_file): os.remove(temp_stdout_file)
+        if os.path.exists(temp_stderr_file): os.remove(temp_stderr_file)
+
+        # Launch tmate without arguments to let it print links to stdout/stderr.
+        # It should typically daemonize itself after printing the links.
         with open(temp_stdout_file, 'w') as stdout_f, open(temp_stderr_file, 'w') as stderr_f:
             process = subprocess.Popen(
-                ['tmate', '-d', 'new-session'], # Detached and new session
+                ['tmate'], # Most basic launch command
                 stdout=stdout_f,
                 stderr=stderr_f,
                 text=True,
                 env=os.environ.copy()
             )
-        log_message(f"tmate process launched in detached mode with PID: {process.pid}. Output redirected to {temp_stdout_file} and {temp_stderr_file}.")
+        log_message(f"tmate process launched with PID: {process.pid}. Output redirected to {temp_stdout_file} and {temp_stderr_file}.")
 
-        # Wait for tmate to start and write its links to the log files
-        # Give it up to 60 seconds to write the links
-        max_wait_time = 60
-        poll_interval = 2
+        max_wait_time = 60 # Max seconds to wait for links to appear in file
+        poll_interval = 2 # Seconds between checks
         start_time = time.time()
         
         while time.time() - start_time < max_wait_time:
@@ -390,9 +416,14 @@ def start_new_tmate_session():
                 log_message("All expected tmate session links found in output.")
                 break # All links found, exit loop
             
+            # Check if process has exited prematurely
+            if process.poll() is not None:
+                log_error(f"tmate process exited with code {process.returncode} before all links were found. Full output:\n{tmate_output_buffer}")
+                break # Process exited, no more output will come
+
             time.sleep(poll_interval) # Wait before checking files again
 
-        # Clean up temporary files
+        # Clean up temporary files regardless of success or failure
         if os.path.exists(temp_stdout_file): os.remove(temp_stdout_file)
         if os.path.exists(temp_stderr_file): os.remove(temp_stderr_file)
 
@@ -739,7 +770,7 @@ WantedBy=multi-user.target
             escaped_content = service_content.strip().replace('"', '\\"')
             write_cmd = f"echo \"{escaped_content}\" | sudo tee {service_file_path}"
             if not run_command(write_cmd, shell=True):
-                log_error(f"Failed to write service file to {service_file_path} even with 'sudo tee'. Check system permissions or disk issues.")
+                log_error(f"Failed to write service file to {service_file_path} even with 'sudo tee'. Check sudo privileges or disk issues.")
                 return False
             log_message(f"Service file '{service_file_path}' written via 'sudo tee'.")
         except Exception as e:
