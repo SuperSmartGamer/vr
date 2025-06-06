@@ -23,6 +23,7 @@ import traceback
 
 # --- Global Configuration ---
 TMATE_INSTALL_DIR = "/usr/local/bin"
+TMATE_EXECUTABLE_PATH = os.path.join(TMATE_INSTALL_DIR, "tmate")
 SERVICE_BASE_DIR = "/opt/tmate_monitor"
 TMATE_CONFIG_FILE = os.path.join(SERVICE_BASE_DIR, ".tmate.conf")
 TMATE_SOCKET_PATH = "/tmp/tmate.sock"
@@ -124,7 +125,7 @@ if __name__ == "__main__":
 def log(level, message, exc_info=False):
     """Unified logger."""
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{level.upper()}] {timestamp} {message}", file=sys.stderr if level == 'error' else sys.stdout)
+    print(f"[{level.upper()}] {timestamp} {message}", file=sys.stderr if level.lower() in ['error', 'warning'] else sys.stdout)
     if exc_info:
         traceback.print_exc(file=sys.stderr)
 
@@ -133,18 +134,19 @@ def run_cmd(cmd, check=True, timeout=60):
     """A wrapper for subprocess.run with unified logging and error handling."""
     try:
         log('cmd', f"Executing: {' '.join(cmd)}")
+        # Use Popen to handle stdout/stderr streaming if needed, but run is simpler for now
         result = subprocess.run(cmd, capture_output=True, text=True, check=check, timeout=timeout)
-        if result.stdout:
-            log('info', f"Stdout: {result.stdout.strip()}")
         return result.stdout.strip()
     except FileNotFoundError:
-        log('error', f"Command not found: {cmd[0]}. Is it in your PATH?")
+        log('error', f"Command not found: {cmd[0]}. Is it in your system's PATH?")
         return None
     except subprocess.CalledProcessError as e:
-        log('error', f"Command '{' '.join(cmd)}' failed with exit code {e.returncode}.")
+        # Log non-zero exit codes as warnings instead of errors for commands like pkill
+        log_level = 'warning' if 'pkill' in cmd[0] else 'error'
+        log(log_level, f"Command '{' '.join(cmd)}' returned non-zero exit code {e.returncode}.")
         if e.stderr:
-            log('error', f"Stderr: {e.stderr.strip()}")
-        return None
+            log(log_level, f"Stderr: {e.stderr.strip()}")
+        return None # Indicate failure
     except subprocess.TimeoutExpired:
         log('error', f"Command '{' '.join(cmd)}' timed out after {timeout} seconds.")
         return None
@@ -155,69 +157,86 @@ def run_cmd(cmd, check=True, timeout=60):
 # --- Action Functions ---
 
 def action_install():
-    """Downloads, extracts, and installs the latest tmate binary."""
-    log('info', "Starting tmate installation...")
+    """
+    Downloads, extracts, and installs the latest tmate binary with redundancy.
+    """
+    log('info', "Starting robust tmate installation...")
     if os.geteuid() != 0:
         log('error', "This action requires root privileges. Please run with sudo.")
         return False
 
-    # 1. Determine correct binary URL
-    try:
-        log('info', "Fetching latest tmate release information from GitHub...")
-        with urllib.request.urlopen(GITHUB_API_URL, timeout=20) as response:
-            release_info = json.loads(response.read().decode())
-    except Exception:
-        log('error', "Failed to fetch or parse GitHub release data.", exc_info=True)
+    # 1. Fetch release data with retries
+    release_info = None
+    for attempt in range(3):
+        try:
+            log('info', f"Fetching latest tmate release from GitHub (Attempt {attempt + 1}/3)...")
+            with urllib.request.urlopen(GITHUB_API_URL, timeout=20) as response:
+                if response.status == 200:
+                    release_info = json.loads(response.read().decode())
+                    break
+                log('warning', f"GitHub API returned status {response.status}.")
+        except Exception as e:
+            log('warning', f"Failed to fetch release data: {e}")
+        time.sleep(5)
+    
+    if not release_info:
+        log('error', "Could not fetch release data from GitHub after multiple attempts.")
         return False
 
+    # 2. Determine correct binary URL with flexible matching
     system = platform.system()
     machine = platform.machine()
-    arch_map = {"x86_64": "amd64", "aarch64": "arm64v8"} # Common mappings
-    arch = arch_map.get(machine)
-
-    if system != "Linux" or not arch:
+    arch_aliases = {"x86_64": ["amd64", "x86_64"], "aarch64": ["arm64", "aarch64"]}
+    
+    if system != "Linux" or machine not in arch_aliases:
         log('error', f"Unsupported OS/Architecture: {system}/{machine}.")
         return False
 
-    asset_keyword = f"linux-{arch}"
     download_url = None
     for asset in release_info.get("assets", []):
-        if asset_keyword in asset["name"] and asset["name"].endswith(".tar.xz"):
+        name = asset["name"].lower()
+        is_linux = "linux" in name
+        is_correct_arch = any(arch in name for arch in arch_aliases[machine])
+        is_supported_archive = name.endswith((".tar.xz", ".tar.gz"))
+
+        if is_linux and is_correct_arch and is_supported_archive:
             download_url = asset["browser_download_url"]
+            log('info', f"Found suitable asset: {asset['name']}")
             break
 
     if not download_url:
-        log('error', f"Could not find a suitable tmate binary for your architecture ({arch}).")
+        log('error', f"Could not find a suitable tmate binary for your architecture ({machine}).")
         return False
 
-    # 2. Clean up previous installation
+    # 3. Clean up previous installation
     log('info', "Cleaning up old tmate processes and files...")
-    subprocess.run(["pkill", "-f", "tmate"], check=False) # Best effort kill
+    run_cmd(["pkill", "-f", "tmate"], check=False)
     time.sleep(1)
-    if os.path.exists(os.path.join(TMATE_INSTALL_DIR, "tmate")):
-        os.remove(os.path.join(TMATE_INSTALL_DIR, "tmate"))
+    if os.path.exists(TMATE_EXECUTABLE_PATH):
+        os.remove(TMATE_EXECUTABLE_PATH)
 
-    # 3. Download and extract
+    # 4. Download and extract
     archive_path = f"/tmp/{download_url.split('/')[-1]}"
     extract_path = "/tmp/tmate_extract"
     try:
         log('info', f"Downloading from {download_url}...")
         urllib.request.urlretrieve(download_url, archive_path)
-        if os.path.exists(extract_path):
-            shutil.rmtree(extract_path)
+        
+        if os.path.exists(extract_path): shutil.rmtree(extract_path)
         os.makedirs(extract_path)
-        with tarfile.open(archive_path, "r:xz") as tar:
+
+        log('info', f"Extracting archive {archive_path}...")
+        with tarfile.open(archive_path) as tar:
             tar.extractall(path=extract_path)
 
-        # 4. Find and install binary
         extracted_binary = next((os.path.join(r, f) for r, _, files in os.walk(extract_path) for f in files if f == 'tmate'), None)
         if not extracted_binary:
             log('error', "Could not find 'tmate' executable in the downloaded archive.")
             return False
 
-        log('info', f"Installing tmate to {TMATE_INSTALL_DIR}...")
-        shutil.move(extracted_binary, os.path.join(TMATE_INSTALL_DIR, "tmate"))
-        os.chmod(os.path.join(TMATE_INSTALL_DIR, "tmate"), 0o755)
+        log('info', f"Installing tmate to {TMATE_EXECUTABLE_PATH}...")
+        shutil.move(extracted_binary, TMATE_EXECUTABLE_PATH)
+        os.chmod(TMATE_EXECUTABLE_PATH, 0o755)
 
     except Exception:
         log('error', "An error occurred during download or extraction.", exc_info=True)
@@ -226,14 +245,19 @@ def action_install():
         if os.path.exists(archive_path): os.remove(archive_path)
         if os.path.exists(extract_path): shutil.rmtree(extract_path)
 
-    # 5. Verify installation
-    version = run_cmd([os.path.join(TMATE_INSTALL_DIR, "tmate"), "-V"])
-    if version and "tmate" in version:
-        log('info', f"tmate installation successful! Version: {version}")
-        return True
-    else:
-        log('error', "tmate verification failed after installation.")
+    # 5. Verify installation robustly
+    log('info', "Verifying tmate installation...")
+    if not os.path.exists(TMATE_EXECUTABLE_PATH):
+        log('error', "Verification failed: tmate executable not found at the installation path.")
         return False
+        
+    version = run_cmd([TMATE_EXECUTABLE_PATH, "-V"])
+    if not (version and "tmate" in version):
+        log('error', "Verification failed: 'tmate -V' did not return expected output.")
+        return False
+
+    log('info', f"tmate installation successful! Version: {version}")
+    return True
 
 def action_setup_service():
     """Creates directories, config files, and the systemd service file."""
@@ -241,26 +265,23 @@ def action_setup_service():
     if os.geteuid() != 0:
         log('error', "This action requires root privileges. Please run with sudo.")
         return False
+    
+    if not os.path.exists(TMATE_EXECUTABLE_PATH):
+        log('error', f"tmate is not installed at {TMATE_EXECUTABLE_PATH}. Please run the 'install' action first.")
+        return False
 
     try:
-        # Create base directory
         os.makedirs(SERVICE_BASE_DIR, 0o755, exist_ok=True)
-
-        # Create tmate config file
         with open(TMATE_CONFIG_FILE, 'w') as f:
             f.write(TMATE_CONFIG_CONTENT)
         log('info', f"Created tmate config at {TMATE_CONFIG_FILE}")
 
-        # Create placeholder uploader script
         if not os.path.exists(UPLOAD_SCRIPT_PATH):
             with open(UPLOAD_SCRIPT_PATH, 'w') as f:
                 f.write(UPLOADER_PLACEHOLDER_CONTENT)
             os.chmod(UPLOAD_SCRIPT_PATH, 0o755)
             log('warning', f"Created placeholder uploader at {UPLOAD_SCRIPT_PATH}. You MUST edit it with your cloud credentials.")
-        else:
-            log('info', "Uploader script already exists, skipping creation.")
-        
-        # Create systemd service file content
+
         script_path = os.path.realpath(__file__)
         service_content = f"""[Unit]
 Description=Persistent tmate Session Monitor
@@ -286,7 +307,6 @@ WantedBy=multi-user.target
             f.write(service_content)
         log('info', f"Created systemd service file at {SYSTEMD_SERVICE_PATH}")
 
-        # Reload systemd
         log('info', "Reloading systemd daemon...")
         run_cmd(["systemctl", "daemon-reload"])
         
@@ -297,59 +317,89 @@ WantedBy=multi-user.target
         log('error', "An error occurred during service setup.", exc_info=True)
         return False
 
+def get_tmate_links():
+    """Retrieves all session URLs from a running tmate daemon."""
+    links = {}
+    keys = {
+        "Web Session (R/W)": "#{tmate_web}",
+        "Web Session (RO)": "#{tmate_web_ro}",
+        "SSH Session (R/W)": "#{tmate_ssh}",
+        "SSH Session (RO)": "#{tmate_ssh_ro}",
+    }
+    for name, key in keys.items():
+        cmd = [TMATE_EXECUTABLE_PATH, "-S", TMATE_SOCKET_PATH, "display", "-p", key]
+        link = run_cmd(cmd, check=False) # Check=False because it can return empty if not ready
+        if link and ("ssh" in link or "https" in link):
+            links[name] = link
+    return links if len(links) == len(keys) else None
+
 def action_run_monitor():
     """The main monitoring loop executed by the systemd service."""
     log('info', "tmate monitor started. Entering main loop...")
     while True:
         try:
-            # Check for a running session by querying links
-            keys = {"ssh": "#{tmate_ssh}", "web_ro": "#{tmate_web_ro}"}
-            cmd = ["tmate", "-S", TMATE_SOCKET_PATH, "display", "-p", keys['ssh']]
-            session_ok = run_cmd(cmd, check=False) is not None
+            links = get_tmate_links()
 
-            if not session_ok:
-                log('warning', "tmate session not found or unresponsive. Attempting to start a new one.")
-                subprocess.run(["pkill", "-f", "tmate"], check=False)
+            if not links:
+                log('warning', "tmate session not found or unresponsive. Starting a new one.")
+                run_cmd(["pkill", "-f", "tmate"], check=False)
                 if os.path.exists(TMATE_SOCKET_PATH): os.remove(TMATE_SOCKET_PATH)
                 time.sleep(2)
 
                 start_cmd = [
-                    "tmate", "-S", TMATE_SOCKET_PATH,
+                    TMATE_EXECUTABLE_PATH, "-S", TMATE_SOCKET_PATH,
                     "-f", TMATE_CONFIG_FILE,
                     "new-session", "-d"
                 ]
-                if run_cmd(start_cmd, check=False) is None:
+                if run_cmd(start_cmd) is None:
                     log('error', "Failed to start new tmate session. Will retry.")
                     time.sleep(60)
                     continue
                 
                 log('info', "New session created. Waiting for it to connect...")
-                time.sleep(15) # Give time for keys to be generated
+                time.sleep(15)
+                links = get_tmate_links()
 
-            # Retrieve all links
-            links = {}
-            for name, key in keys.items():
-                cmd = ["tmate", "-S", TMATE_SOCKET_PATH, "display", "-p", key]
-                link = run_cmd(cmd)
-                if link: links[name] = link
-            
-            if len(links) == len(keys):
+            if links:
                 log('info', "Successfully retrieved session URLs.")
-                content = "\n".join([f"{k}: {v}" for k, v in links.items()])
+                content = "\n".join([f"{name}: {url}" for name, url in links.items()])
                 with open(URL_OUTPUT_FILE, 'w') as f: f.write(content + "\n")
                 
-                # Attempt to upload
                 if os.path.exists(UPLOAD_SCRIPT_PATH):
                     log('info', "Executing uploader script...")
-                    run_cmd([UPLOAD_SCRIPT_PATH, URL_OUTPUT_FILE])
+                    run_cmd([UPLOAD_SCRIPT_PATH, URL_OUTPUT_FILE], check=False)
             else:
-                log('error', "Failed to retrieve all session links after start. The session may be unstable.")
+                log('error', "Failed to retrieve session links after start. The session may be unstable.")
 
         except Exception:
             log('error', "An unhandled error occurred in the monitor loop.", exc_info=True)
 
         log('info', f"Check complete. Next check in 5 minutes.")
         time.sleep(300)
+
+def action_status():
+    """Checks the status of the service and the tmate session."""
+    log('info', "Checking tmate service status...")
+    if os.geteuid() != 0:
+        log('error', "This action requires root privileges for full status check.")
+        return False
+        
+    service_active = run_cmd(["systemctl", "is-active", SYSTEMD_SERVICE_NAME], check=False)
+    print(f"\n--- Service Status ---")
+    print(f"Service ({SYSTEMD_SERVICE_NAME}) is: {service_active}")
+
+    print(f"\n--- tmate Session Status ---")
+    links = get_tmate_links()
+    if links:
+        print("tmate session is ACTIVE. URLs:")
+        for name, url in links.items():
+            print(f"  {name}: {url}")
+    else:
+        print("tmate session is INACTIVE or not responding.")
+
+    print("\nTo see detailed service logs, run:")
+    print(f"  journalctl -u {SYSTEMD_SERVICE_NAME} -n 50 -f\n")
+    return True
 
 def action_uninstall():
     """Completely removes the tmate binary, service, and all related files."""
@@ -358,7 +408,6 @@ def action_uninstall():
         log('error', "This action requires root privileges. Please run with sudo.")
         return False
 
-    # 1. Stop and disable the service
     if os.path.exists(SYSTEMD_SERVICE_PATH):
         log('info', f"Stopping and disabling {SYSTEMD_SERVICE_NAME} service...")
         run_cmd(["systemctl", "stop", SYSTEMD_SERVICE_NAME], check=False)
@@ -367,20 +416,14 @@ def action_uninstall():
         run_cmd(["systemctl", "daemon-reload"])
         run_cmd(["systemctl", "reset-failed"], check=False)
 
-    # 2. Kill all tmate processes
-    log('info', "Terminating any running tmate processes...")
-    subprocess.run(["pkill", "-f", "tmate"], check=False)
+    run_cmd(["pkill", "-f", "tmate"], check=False)
 
-    # 3. Remove files
-    tmate_binary = os.path.join(TMATE_INSTALL_DIR, "tmate")
-    if os.path.exists(tmate_binary):
-        log('info', f"Removing tmate binary: {tmate_binary}")
-        os.remove(tmate_binary)
-
+    if os.path.exists(TMATE_EXECUTABLE_PATH):
+        log('info', f"Removing tmate binary: {TMATE_EXECUTABLE_PATH}")
+        os.remove(TMATE_EXECUTABLE_PATH)
     if os.path.exists(SERVICE_BASE_DIR):
         log('info', f"Removing service directory: {SERVICE_BASE_DIR}")
         shutil.rmtree(SERVICE_BASE_DIR)
-
     if os.path.exists(TMATE_SOCKET_PATH):
         os.remove(TMATE_SOCKET_PATH)
 
@@ -393,23 +436,39 @@ def main():
         "install": action_install,
         "setup-service": action_setup_service,
         "run": action_run_monitor,
-        "uninstall": action_uninstall
+        "uninstall": action_uninstall,
+        "status": action_status,
     }
     
     if len(sys.argv) < 2 or sys.argv[1] not in actions:
-        print("tmate-bootstrap: All-in-one tmate service manager")
-        print("\nUsage: sudo ./tmate_monitor.py [ACTION]")
+        print("\ntmate-bootstrap: All-in-one tmate service manager")
+        print("\nUsage: sudo ./tmate_bootstrap.py [ACTION]")
         print("\nActions:")
         print("  install        - Downloads and installs the latest tmate binary.")
         print("  setup-service  - Creates configs and the systemd service file.")
-        print("  run            - Starts the monitoring loop (used by the service).")
+        print("  status         - Checks the current status of the service and session.")
         print("  uninstall      - Removes the tmate binary and all service files.")
+        print("  run            - (Internal) Starts the monitoring loop for the service.")
         print("\nRecommended Workflow:")
-        print("  1. sudo ./tmate_monitor.py install")
-        print("  2. sudo ./tmate_monitor.py setup-service")
+        print("  1. sudo ./tmate_bootstrap.py install")
+        print("  2. sudo ./tmate_bootstrap.py setup-service")
         print("  3. Edit /opt/tmate_monitor/uploader.py with your cloud credentials.")
         print("  4. sudo systemctl enable --now tmate-monitor.service")
+        print("  5. sudo ./tmate_bootstrap.py status")
         sys.exit(1)
+
+    # Rename script for user convenience
+    if not __file__.endswith('tmate_bootstrap.py'):
+        try:
+            new_name = os.path.join(os.path.dirname(__file__), 'tmate_bootstrap.py')
+            shutil.move(__file__, new_name)
+            log('info', f"Renamed script to 'tmate_bootstrap.py' for clarity. Please use the new name.")
+            # Exit so the user can re-run with the new name
+            sys.exit(0)
+        except Exception:
+             # Fails silently if permissions are an issue, not critical
+             pass
+
 
     action = sys.argv[1]
     func = actions[action]
