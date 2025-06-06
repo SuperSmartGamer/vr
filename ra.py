@@ -305,8 +305,7 @@ def configure_tmate_keybindings():
 def get_current_tmate_session_info():
     """
     Checks for an existing tmate session process and returns its PID if found.
-    Does NOT attempt to retrieve session links using tmate commands here, as
-    start_new_tmate_session will handle capturing output directly.
+    This function primarily uses 'pgrep' to find the PID.
     Returns (None, process_id) or (None, None).
     """
     log_message("Checking for existing tmate session process...")
@@ -347,10 +346,48 @@ def start_new_tmate_session():
         )
         log_message(f"tmate process launched with PID: {process.pid}.")
 
-        start_time = time.time()
-        # Read both stdout and stderr line by line for session links
-        # Give it up to 60 seconds to provide links and exit or daemonize
-        while time.time() - start_time < 60:
+        # Give tmate a moment to produce output, increasing timeout
+        initial_read_timeout = 20 # Increased from 10 seconds
+        try:
+            # Read stdout and stderr simultaneously using communicate for a fixed time.
+            # This is more reliable for initial burst of output.
+            initial_stdout, initial_stderr = process.communicate(timeout=initial_read_timeout)
+            if initial_stdout:
+                tmate_output_buffer += initial_stdout
+                log_message(f"tmate initial stdout:\n{initial_stdout.strip()}")
+            if initial_stderr:
+                tmate_output_buffer += initial_stderr
+                log_error(f"tmate initial stderr:\n{initial_stderr.strip()}") # Log stderr as error
+            
+            # If process has exited after communicate, log its return code
+            if process.returncode is not None and process.returncode != 0:
+                log_error(f"tmate process {process.pid} exited with non-zero code {process.returncode} after initial output capture.")
+                # We won't find links if it exited with error, so return None
+                return None, None
+
+        except subprocess.TimeoutExpired as e:
+            log_error(f"tmate process initial output capture timed out after {initial_read_timeout} seconds.")
+            # If timeout, it means tmate is still running but not producing links quickly.
+            # We'll then try to read line by line below.
+            if e.stdout: log_message(f"tmate partial stdout on timeout: {e.stdout.strip()}")
+            if e.stderr: log_error(f"tmate partial stderr on timeout: {e.stderr.strip()}")
+            # If it timed out, the process is still running, so we continue to the loop
+            pass # Continue to the main reading loop
+
+        except Exception as e:
+            log_error(f"An unexpected error during tmate initial communicate: {e}", include_traceback=True)
+            if process.poll() is None: # If still running, try to terminate
+                log_warning(f"tmate process {process.pid} still running after error. Attempting to terminate.")
+                process.terminate()
+                process.wait(timeout=5)
+            return None, None # Critical error, cannot proceed
+
+
+        start_time_link_parse = time.time()
+        # Continue reading from pipes if communicate timed out or if process is still running
+        # Give it up to 60 seconds (total) to daemonize and provide links.
+        # This loop is specifically for ensuring we capture links after the initial burst.
+        while time.time() - start_time_link_parse < 60: # Max 60 seconds for links to appear
             stdout_line = process.stdout.readline()
             stderr_line = process.stderr.readline()
 
@@ -382,7 +419,7 @@ def start_new_tmate_session():
                 tmate_output_buffer += remaining_stdout + remaining_stderr
                 if remaining_stdout: log_message(f"tmate final stdout: {remaining_stdout.strip()}")
                 if remaining_stderr: log_error(f"tmate final stderr: {remaining_stderr.strip()}")
-                log_error(f"tmate process exited with code {process.returncode} before all links were found.")
+                log_error(f"tmate process exited with code {process.returncode} before all links were found in main loop.")
                 break # Process exited, no more output
 
             time.sleep(1) # Wait a bit before reading again
@@ -392,7 +429,7 @@ def start_new_tmate_session():
             log_message("New tmate session started and all links retrieved from direct output.")
             return session_links, process.pid
         else:
-            log_error("Failed to find all required tmate session links in direct output after timeout.")
+            log_error("Failed to find all required tmate session links in direct output after total timeout.")
             log_error(f"Full tmate captured output (for analysis):\n{tmate_output_buffer}")
             if process.poll() is None: # If process is still running, try to kill it
                 log_warning(f"tmate process {process.pid} is still running but did not provide links. Attempting to terminate.")
