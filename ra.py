@@ -325,78 +325,55 @@ def get_current_tmate_session_info():
 
 def start_new_tmate_session():
     """
-    Starts a new tmate session and attempts to capture its initial output
+    Starts a new tmate session in detached mode and attempts to capture its initial output
     to extract session links.
     Returns (links, process_id) or (None, None).
     """
-    log_message("Attempting to start a new tmate session and capture links from its direct output...")
+    log_message("Attempting to start a new tmate session in detached mode and capture links...")
     process = None
     tmate_output_buffer = ""
     session_links = {}
+    temp_stdout_file = "/tmp/tmate_stdout.log"
+    temp_stderr_file = "/tmp/tmate_stderr.log"
 
     try:
-        # Launch tmate without any arguments. It should print links to stdout/stderr.
-        process = subprocess.Popen(
-            ['tmate'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1, # Line-buffered output
-            env=os.environ.copy()
-        )
-        log_message(f"tmate process launched with PID: {process.pid}.")
+        # Launch tmate in detached mode (-d) and redirect its output to temporary files.
+        # This prevents the Python script from blocking while tmate runs.
+        # We also create a new session here explicitly.
+        with open(temp_stdout_file, 'w') as stdout_f, open(temp_stderr_file, 'w') as stderr_f:
+            process = subprocess.Popen(
+                ['tmate', '-d', 'new-session'], # Detached and new session
+                stdout=stdout_f,
+                stderr=stderr_f,
+                text=True,
+                env=os.environ.copy()
+            )
+        log_message(f"tmate process launched in detached mode with PID: {process.pid}. Output redirected to {temp_stdout_file} and {temp_stderr_file}.")
 
-        # Give tmate a moment to produce output, increasing timeout
-        initial_read_timeout = 20 # Increased from 10 seconds
-        try:
-            # Read stdout and stderr simultaneously using communicate for a fixed time.
-            # This is more reliable for initial burst of output.
-            initial_stdout, initial_stderr = process.communicate(timeout=initial_read_timeout)
-            if initial_stdout:
-                tmate_output_buffer += initial_stdout
-                log_message(f"tmate initial stdout:\n{initial_stdout.strip()}")
-            if initial_stderr:
-                tmate_output_buffer += initial_stderr
-                log_error(f"tmate initial stderr:\n{initial_stderr.strip()}") # Log stderr as error
-            
-            # If process has exited after communicate, log its return code
-            if process.returncode is not None and process.returncode != 0:
-                log_error(f"tmate process {process.pid} exited with non-zero code {process.returncode} after initial output capture.")
-                # We won't find links if it exited with error, so return None
-                return None, None
+        # Wait for tmate to start and write its links to the log files
+        # Give it up to 60 seconds to write the links
+        max_wait_time = 60
+        poll_interval = 2
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait_time:
+            # Re-read content from temp files
+            try:
+                if os.path.exists(temp_stdout_file):
+                    with open(temp_stdout_file, 'r') as f:
+                        current_stdout = f.read()
+                        if current_stdout not in tmate_output_buffer: # Only append new content
+                            tmate_output_buffer += current_stdout
+                            log_message(f"tmate stdout (from file): {current_stdout.strip()}")
+                if os.path.exists(temp_stderr_file):
+                    with open(temp_stderr_file, 'r') as f:
+                        current_stderr = f.read()
+                        if current_stderr not in tmate_output_buffer: # Only append new content
+                            tmate_output_buffer += current_stderr
+                            log_error(f"tmate stderr (from file): {current_stderr.strip()}")
 
-        except subprocess.TimeoutExpired as e:
-            log_error(f"tmate process initial output capture timed out after {initial_read_timeout} seconds.")
-            # If timeout, it means tmate is still running but not producing links quickly.
-            # We'll then try to read line by line below.
-            if e.stdout: log_message(f"tmate partial stdout on timeout: {e.stdout.strip()}")
-            if e.stderr: log_error(f"tmate partial stderr on timeout: {e.stderr.strip()}")
-            # If it timed out, the process is still running, so we continue to the loop
-            pass # Continue to the main reading loop
-
-        except Exception as e:
-            log_error(f"An unexpected error during tmate initial communicate: {e}", include_traceback=True)
-            if process.poll() is None: # If still running, try to terminate
-                log_warning(f"tmate process {process.pid} still running after error. Attempting to terminate.")
-                process.terminate()
-                process.wait(timeout=5)
-            return None, None # Critical error, cannot proceed
-
-
-        start_time_link_parse = time.time()
-        # Continue reading from pipes if communicate timed out or if process is still running
-        # Give it up to 60 seconds (total) to daemonize and provide links.
-        # This loop is specifically for ensuring we capture links after the initial burst.
-        while time.time() - start_time_link_parse < 60: # Max 60 seconds for links to appear
-            stdout_line = process.stdout.readline()
-            stderr_line = process.stderr.readline()
-
-            if stdout_line:
-                tmate_output_buffer += stdout_line
-                log_message(f"tmate stdout: {stdout_line.strip()}")
-            if stderr_line:
-                tmate_output_buffer += stderr_line
-                log_error(f"tmate stderr: {stderr_line.strip()}") # Log stderr as error
+            except IOError as e:
+                log_warning(f"Could not read temporary tmate output file: {e}")
 
             # Attempt to parse links from all captured output
             web_ro_match = re.search(r"readonly access web session: (https://tmate\.io/t/ro-[a-zA-Z0-9]+)", tmate_output_buffer)
@@ -412,32 +389,29 @@ def start_new_tmate_session():
             if session_links and all(key in session_links for key in ['web', 'ssh', 'web_ro', 'ssh_ro']):
                 log_message("All expected tmate session links found in output.")
                 break # All links found, exit loop
+            
+            time.sleep(poll_interval) # Wait before checking files again
 
-            if process.poll() is not None:
-                # Process exited, and we haven't found all links. Read remaining output.
-                remaining_stdout, remaining_stderr = process.communicate()
-                tmate_output_buffer += remaining_stdout + remaining_stderr
-                if remaining_stdout: log_message(f"tmate final stdout: {remaining_stdout.strip()}")
-                if remaining_stderr: log_error(f"tmate final stderr: {remaining_stderr.strip()}")
-                log_error(f"tmate process exited with code {process.returncode} before all links were found in main loop.")
-                break # Process exited, no more output
-
-            time.sleep(1) # Wait a bit before reading again
+        # Clean up temporary files
+        if os.path.exists(temp_stdout_file): os.remove(temp_stdout_file)
+        if os.path.exists(temp_stderr_file): os.remove(temp_stderr_file)
 
         # Final check for links after loop
         if session_links and all(key in session_links for key in ['web', 'ssh', 'web_ro', 'ssh_ro']):
             log_message("New tmate session started and all links retrieved from direct output.")
-            return session_links, process.pid
+            # Verify tmate is still running by checking for its PID
+            pid_output = run_command(["pgrep", "-f", "tmate -S"], check_output=True)
+            if pid_output:
+                tmate_pid = int(pid_output.splitlines()[0])
+                return session_links, tmate_pid
+            else:
+                log_error("tmate process was not found by pgrep after successfully retrieving links. This is unexpected.")
+                return None, None # Links found but process vanished, treat as failure
         else:
             log_error("Failed to find all required tmate session links in direct output after total timeout.")
             log_error(f"Full tmate captured output (for analysis):\n{tmate_output_buffer}")
-            if process.poll() is None: # If process is still running, try to kill it
-                log_warning(f"tmate process {process.pid} is still running but did not provide links. Attempting to terminate.")
-                process.terminate()
-                process.wait(timeout=5)
-                if process.poll() is None:
-                    process.kill()
-            kill_cmd = f"pkill -f 'tmate -S'" # Ensure any lingering server is killed
+            # Ensure any lingering tmate processes are killed if links were not found
+            kill_cmd = f"pkill -f 'tmate -S'" 
             run_command([kill_cmd], shell=True, sudo=True)
             return None, None
 
@@ -447,10 +421,15 @@ def start_new_tmate_session():
     except Exception as e:
         log_error(f"An unexpected error occurred while trying to start a new tmate session: {e}", include_traceback=True)
         if process and process.poll() is None:
+            # If the Popen object itself is still active (not detached correctly), try to kill it
+            log_warning(f"tmate process {process.pid} still running after error in start_new_tmate_session. Attempting to terminate.")
             process.terminate()
             process.wait(timeout=5)
             if process.poll() is None:
                 process.kill()
+        # Clean up temp files in case of early exit
+        if os.path.exists(temp_stdout_file): os.remove(temp_stdout_file)
+        if os.path.exists(temp_stderr_file): os.remove(temp_stderr_file)
         return None, None
 
 def write_shs_file(links):
@@ -589,6 +568,12 @@ def start_new_tmate_session_internal_get_links_only():
     log_message("Attempting to retrieve links from an existing tmate server using 'tmate display -p'.")
     session_links = {}
     try:
+        # Check if tmate is running using pgrep first, if not, no point in calling display -p
+        _, pid = get_current_tmate_session_info()
+        if not pid:
+            log_warning("No existing tmate process found for link retrieval. Skipping 'display -p' calls.")
+            return None, None
+
         ssh_ro_link = run_command(["tmate", "display", "-p", "#{tmate_ssh_ro}"], check_output=True)
         if ssh_ro_link and "ssh ro-" in ssh_ro_link: session_links['ssh_ro'] = ssh_ro_link.strip()
 
@@ -603,13 +588,7 @@ def start_new_tmate_session_internal_get_links_only():
 
         if session_links and all(key in session_links for key in ['web', 'ssh', 'web_ro', 'ssh_ro']):
             log_message("Successfully retrieved all expected tmate session links via 'tmate display -p'.")
-            pid_output = run_command(["pgrep", "-f", "tmate -S"], check_output=True)
-            if pid_output:
-                tmate_pid = int(pid_output.splitlines()[0])
-                return session_links, tmate_pid
-            else:
-                log_warning("Could not determine PID for existing tmate server after retrieving links. This is unexpected.")
-                return session_links, None
+            return session_links, pid # Use the previously found PID
         else:
             log_warning("Could not retrieve all required tmate session links using 'tmate display -p' from existing server.")
             return None, None
