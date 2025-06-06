@@ -16,7 +16,6 @@ TMATE_CONFIG_FILE = "/root/.tmate.conf" # tmate will look for this by default wh
 TMATE_RELEASE_URL = "https://api.github.com/repos/tmate-io/tmate/releases/latest"
 SERVICE_BASE_DIR = "/opt/tmate_monitor"
 SHS_FILE_PATH = os.path.join(SERVICE_BASE_DIR, "shs.txt")
-# UPLOAD_SCRIPT_PATH will now be dynamically determined during setup
 
 SYSTEMD_SERVICE_NAME = "tmate_monitor.service"
 
@@ -33,6 +32,37 @@ unbind-key x
 # This keeps the links visible longer on screen if an interactive session were attached.
 set -g display-time 0
 """
+
+# Dummy content for upload.py if the user doesn't provide their own
+DUMMY_UPLOAD_CONTENT = """
+# This is a placeholder for your R2 upload script.
+# You MUST replace this with your actual Cloudflare R2 upload logic.
+
+def upload_to_r2(file_path):
+    print(f"[UPLOAD] Simulating upload of {file_path} to Cloudflare R2...")
+    # --- YOUR ACTUAL R2 UPLOAD LOGIC GOES HERE ---
+    # Example (using boto3, assuming credentials/config are set up):
+    # import boto3
+    # s3_client = boto3.client(
+    #     's3',
+    #     endpoint_url='YOUR_R2_ENDPOINT_URL', # e.g., https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+    #     aws_access_key_id='YOUR_R2_ACCESS_KEY_ID',
+    #     aws_secret_access_key='YOUR_R2_SECRET_ACCESS_KEY'
+    # )
+    # try:
+    #     bucket_name = 'YOUR_R2_BUCKET_NAME'
+    #     object_name = os.path.basename(file_path) # or a more complex path like 'tmate_urls/shs.txt'
+    #     s3_client.upload_file(file_path, bucket_name, object_name)
+    #     print(f"[UPLOAD] Successfully uploaded {object_name} to R2 bucket {bucket_name}.")
+    #     return True
+    # except Exception as e:
+    #     print(f"[UPLOAD_ERROR] Failed to upload to R2: {e}")
+    #     return False
+    # -----------------------------------------------
+    print(f"[UPLOAD] Simulation successful for {file_path}. Please replace this with real logic.")
+    return True
+"""
+
 
 def log_message(message):
     """Prints a message to stdout, suitable for console and journalctl."""
@@ -228,20 +258,31 @@ def configure_tmate_keybindings():
     """
     Configures tmate for the root user to unbind session/window close keybindings.
     This function REQUIRES sudo privileges to write to /root/.tmate.conf.
+    Ensures content is up-to-date.
     """
     log_message(f"Configuring tmate keybindings in '{TMATE_CONFIG_FILE}' (requires sudo)...")
 
-    try:
-        read_cmd = ["cat", TMATE_CONFIG_FILE]
-        current_content = run_command(read_cmd, check_output=True, sudo=True)
-        if current_content is False:
-            log_warning(f"Could not read {TMATE_CONFIG_FILE} (might not exist or permissions). Will attempt to create/overwrite.")
-            current_content = ""
-
-        if all(line.strip() in current_content for line in TMATE_CONFIG_CONTENT.splitlines() if line.strip()):
+    file_needs_update = False
+    existing_content = ""
+    if os.path.exists(TMATE_CONFIG_FILE):
+        try:
+            with open(TMATE_CONFIG_FILE, 'r') as f:
+                existing_content = f.read().strip()
+        except IOError as e:
+            log_warning(f"Could not read existing {TMATE_CONFIG_FILE}: {e}. Will attempt to overwrite.")
+            file_needs_update = True # Treat as needing update if cannot read
+        
+        if existing_content == TMATE_CONFIG_CONTENT.strip():
             log_message("tmate configuration already present and correct for root. Skipping configuration.")
             return True
+        else:
+            log_message("Existing tmate configuration differs from desired content. Updating...")
+            file_needs_update = True
+    else:
+        log_message(f"'{TMATE_CONFIG_FILE}' does not exist. Creating...")
+        file_needs_update = True
 
+    if file_needs_update:
         try:
             with open(TMATE_CONFIG_FILE, 'w') as f:
                 f.write(TMATE_CONFIG_CONTENT.strip() + "\n")
@@ -250,7 +291,8 @@ def configure_tmate_keybindings():
             log_message(f"Permissions set for '{TMATE_CONFIG_FILE}'.")
             return True
         except IOError as e:
-            log_warning(f"Direct Python write to {TMATE_CONFIG_FILE} failed: {e}. Attempting with 'sudo tee'.")
+            log_error(f"Failed to write tmate configuration file {TMATE_CONFIG_FILE} directly via Python: {e}", include_traceback=True)
+            log_warning("Attempting fallback to 'sudo tee' for tmate config creation.")
             escaped_content = TMATE_CONFIG_CONTENT.strip().replace('"', '\\"')
             write_cmd = f"echo \"{escaped_content}\" | sudo tee {TMATE_CONFIG_FILE}"
             if not run_command(write_cmd, shell=True):
@@ -258,9 +300,7 @@ def configure_tmate_keybindings():
                 return False
             log_message(f"tmate configuration written to '{TMATE_CONFIG_FILE}' via 'sudo tee'.")
             return True
-    except Exception as e:
-        log_error(f"An unexpected error occurred during tmate configuration: {e}", include_traceback=True)
-        return False
+    return False # Should not be reached if logic is correct, but for safety
 
 def get_current_tmate_session_info():
     """
@@ -306,42 +346,45 @@ def get_current_tmate_session_info():
 
 def start_new_tmate_session():
     """
-    Starts a new tmate session in headless mode.
+    Starts a new tmate session.
     Returns (links, process_id) or (None, None).
     """
     log_message("Attempting to start a new tmate session...")
     process = None
     try:
-        # Removed -F flag to see if tmate starts without it and still outputs to stdout
+        # Launch tmate without -F, it should daemonize
         process = subprocess.Popen(
-            ['tmate'], # Removed '-F'
-            stdout=subprocess.PIPE,
+            ['tmate'], # No -F or -f
+            stdout=subprocess.PIPE, # Still capture any initial stdout/stderr
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             env=os.environ.copy()
         )
+        log_message(f"tmate process launched with PID: {process.pid}. Allowing it to daemonize and connect...")
 
-        tmate_output_buffer = ""
-        start_time = time.time()
-        session_links = {}
-        
-        log_message("Reading output from new tmate process...")
-        # Give tmate a moment to potentially daemonize or print initial messages
+        # Wait for tmate to start and connect to its servers
         time.sleep(5) 
 
-        # Now, try to get the messages via tmate show-messages, as -F is removed.
-        # This loop will try to get the output from tmate show-messages repeatedly
-        # until links are found or a timeout occurs.
-        for _ in range(15): # Try for up to 15 * 2 seconds = 30 seconds
+        # Now, try to get the messages via tmate show-messages, as tmate should be running in background.
+        for attempt in range(1, 16): # Try for up to 15 attempts (approx 30 seconds total)
+            log_message(f"Attempt {attempt}/15: Checking for tmate session links via 'tmate show-messages'.")
             links, pid = get_current_tmate_session_info()
             if links and pid:
                 log_message("Successfully retrieved session links via 'tmate show-messages'.")
                 return links, pid
-            log_message("Waiting for tmate session to become active and provide links...")
+            
+            # If tmate process unexpectedly exited before getting links, log its stderr
+            if process.poll() is not None:
+                stderr_output = process.stderr.read()
+                log_error(f"tmate process launched with PID {process.pid} exited prematurely during link retrieval with code {process.returncode}.")
+                if stderr_output:
+                    log_error(f"tmate stderr on premature exit: {stderr_output}")
+                return None, None
+
             time.sleep(2) # Wait before trying again
 
-        log_error("Timeout waiting for tmate session links after removing -F flag. tmate might not be starting or not outputting links reliably.")
+        log_error("Timeout waiting for tmate session links after multiple attempts. tmate might not be starting or not outputting links reliably.")
         # Attempt to kill any lingering tmate process if links not found after multiple attempts
         kill_cmd = f"pkill -f 'tmate -S'"
         run_command([kill_cmd], shell=True, sudo=True)
@@ -351,7 +394,7 @@ def start_new_tmate_session():
         log_error("The 'tmate' command was not found. Please ensure it's installed correctly and in PATH.")
         return None, None
     except Exception as e:
-        log_error(f"An unexpected error occurred while starting new tmate session (after removing -F): {e}", include_traceback=True)
+        log_error(f"An unexpected error occurred while trying to start a new tmate session: {e}", include_traceback=True)
         if process and process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
@@ -475,9 +518,11 @@ def install_systemd_service():
     """
     Installs and enables the tmate_monitor systemd service.
     This function REQUIRES sudo privileges.
+    Ensures content is up-to-date and avoids copying the main script.
     """
     log_message("Attempting to install systemd service (requires sudo)...")
 
+    # 1. Create SERVICE_BASE_DIR
     if not run_command(["mkdir", "-p", SERVICE_BASE_DIR], sudo=True):
         log_error(f"Failed to create service directory {SERVICE_BASE_DIR}.")
         return False
@@ -487,70 +532,77 @@ def install_systemd_service():
 
     current_script_path = os.path.abspath(__file__)
     current_script_dir = os.path.dirname(current_script_path)
-    target_script_path = os.path.join(SERVICE_BASE_DIR, os.path.basename(current_script_path))
+    # target_script_path is now the *original* path of this script
+    target_script_path = current_script_path # No longer copying this script
 
-    if not run_command(["cp", current_script_path, target_script_path], sudo=True):
-        log_error(f"Failed to copy main script from {current_script_path} to {target_script_path}.")
-        return False
-    if not run_command(["chmod", "0755", target_script_path], sudo=True):
-        log_error(f"Failed to make main script executable at {target_script_path}.")
-        return False
-
+    # 2. Handle upload.py
     source_upload_script_path = os.path.join(current_script_dir, "upload.py")
     target_upload_script_path = os.path.join(SERVICE_BASE_DIR, "upload.py")
 
+    file_needs_update = False
     if os.path.exists(source_upload_script_path):
-        log_message(f"Copying '{source_upload_script_path}' to '{SERVICE_BASE_DIR}'.")
-        if not run_command(["cp", source_upload_script_path, target_upload_script_path], sudo=True):
-            log_error(f"Failed to copy upload.py from {source_upload_script_path} to {target_upload_script_path}.")
-            return False
-        if not run_command(["chmod", "0755", target_upload_script_path], sudo=True):
-            log_error(f"Failed to make upload.py executable at {target_upload_script_path}.")
-            return False
-        log_message(f"'{target_upload_script_path}' copied and made executable.")
-    else:
-        log_warning(f"'{source_upload_script_path}' not found. Creating a placeholder '{target_upload_script_path}'. "
-                    "You MUST replace this with your real R2 upload script.")
-        dummy_upload_content = """
-# This is a placeholder for your R2 upload script.
-# You MUST replace this with your actual Cloudflare R2 upload logic.
-
-def upload_to_r2(file_path):
-    print(f"[UPLOAD] Simulating upload of {file_path} to Cloudflare R2...")
-    # --- YOUR ACTUAL R2 UPLOAD LOGIC GOES HERE ---
-    # Example (using boto3, assuming credentials/config are set up):
-    # import boto3
-    # s3_client = boto3.client(
-    #     's3',
-    #     endpoint_url='YOUR_R2_ENDPOINT_URL', # e.g., https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-    #     aws_access_key_id='YOUR_R2_ACCESS_KEY_ID',
-    #     aws_secret_access_key='YOUR_R2_SECRET_ACCESS_KEY'
-    # )
-    # try:
-    #     bucket_name = 'YOUR_R2_BUCKET_NAME'
-    #     object_name = os.path.basename(file_path) # or a more complex path like 'tmate_urls/shs.txt'
-    #     s3_client.upload_file(file_path, bucket_name, object_name)
-    #     print(f"[UPLOAD] Successfully uploaded {object_name} to R2 bucket {bucket_name}.")
-    #     return True
-    # except Exception as e:
-    #     print(f"[UPLOAD_ERROR] Failed to upload to R2: {e}")
-    #     return False
-    # -----------------------------------------------
-    print(f"[UPLOAD] Simulation successful for {file_path}. Please replace this with real logic.")
-    return True
-"""
+        # User has provided their own upload.py, copy it.
+        log_message(f"User-provided 'upload.py' found at '{source_upload_script_path}'. Copying to service directory.")
         try:
-            write_cmd = f"echo \"{dummy_upload_content.strip()}\" | sudo tee {target_upload_script_path}"
-            if not run_command(write_cmd, shell=True):
-                log_error(f"Failed to create dummy upload.py at {target_upload_script_path}.")
-                return False
-            if not run_command(["chmod", "0755", target_upload_script_path], sudo=True):
-                log_error(f"Failed to make upload.py executable at {target_upload_script_path}.")
-                return False
-        except Exception as e:
-            log_error(f"Error creating dummy upload.py: {e}", include_traceback=True)
-            return False
+            # Check content if file exists, only copy if different to avoid unnecessary writes
+            existing_upload_content = ""
+            if os.path.exists(target_upload_script_path):
+                with open(target_upload_script_path, 'r') as f:
+                    existing_upload_content = f.read().strip()
+            
+            with open(source_upload_script_path, 'r') as f:
+                source_content = f.read().strip()
 
+            if existing_upload_content != source_content:
+                if not run_command(["cp", source_upload_script_path, target_upload_script_path], sudo=True):
+                    log_error(f"Failed to copy upload.py from {source_upload_script_path} to {target_upload_script_path}.")
+                    return False
+                if not run_command(["chmod", "0755", target_upload_script_path], sudo=True):
+                    log_error(f"Failed to make upload.py executable at {target_upload_script_path}.")
+                    return False
+                log_message(f"'{target_upload_script_path}' updated and made executable.")
+            else:
+                log_message(f"'{target_upload_script_path}' is already up to date. Skipping copy.")
+        except Exception as e:
+            log_error(f"Error handling user-provided upload.py: {e}", include_traceback=True)
+            return False
+    else:
+        # No user-provided upload.py, create dummy if not exists or if dummy content changed
+        log_warning(f"'{source_upload_script_path}' not found. Managing placeholder '{target_upload_script_path}'.")
+        
+        existing_dummy_content = ""
+        if os.path.exists(target_upload_script_path):
+            try:
+                with open(target_upload_script_path, 'r') as f:
+                    existing_dummy_content = f.read().strip()
+            except IOError as e:
+                log_warning(f"Could not read existing dummy {target_upload_script_path}: {e}. Will attempt to overwrite.")
+                file_needs_update = True
+            
+            if existing_dummy_content == DUMMY_UPLOAD_CONTENT.strip():
+                log_message(f"Dummy '{target_upload_script_path}' is already up to date. Skipping creation.")
+            else:
+                log_message(f"Dummy '{target_upload_script_path}' content differs. Updating...")
+                file_needs_update = True
+        else:
+            log_message(f"Dummy '{target_upload_script_path}' does not exist. Creating...")
+            file_needs_update = True
+
+        if file_needs_update:
+            try:
+                write_cmd = f"echo \"{DUMMY_UPLOAD_CONTENT.strip()}\" | sudo tee {target_upload_script_path}"
+                if not run_command(write_cmd, shell=True):
+                    log_error(f"Failed to create dummy upload.py at {target_upload_script_path}.")
+                    return False
+                if not run_command(["chmod", "0755", target_upload_script_path], sudo=True):
+                    log_error(f"Failed to make upload.py executable at {target_upload_script_path}.")
+                    return False
+                log_message(f"Dummy '{target_upload_script_path}' created/updated.")
+            except Exception as e:
+                log_error(f"Error creating dummy upload.py: {e}", include_traceback=True)
+                return False
+
+    # 3. Create/Update Systemd Service File
     service_content = f"""
 [Unit]
 Description=tmate Session Monitor and Uploader
@@ -563,38 +615,61 @@ User=root
 WorkingDirectory={SERVICE_BASE_DIR}
 StandardOutput=journal
 StandardError=journal
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/usr/bin:/sbin:/bin # Ensure tmate is in PATH for root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin # Ensure tmate is in PATH for root
 
 [Install]
 WantedBy=multi-user.target
 """
     service_file_path = f"/etc/systemd/system/{SYSTEMD_SERVICE_NAME}"
 
-    log_message(f"Creating systemd service file at '{service_file_path}'...")
-    try:
-        with open(service_file_path, 'w') as f:
-            f.write(service_content.strip() + "\n")
-        os.chmod(service_file_path, 0o644)
-        log_message(f"Service file '{service_file_path}' written directly and permissions set.")
-    except IOError as e:
-        log_error(f"Failed to write service file {service_file_path} directly via Python: {e}", include_traceback=True)
-        log_warning("Attempting fallback to 'sudo tee' for service file creation.")
-        escaped_content = service_content.strip().replace('"', '\\"')
-        write_cmd = f"echo \"{escaped_content}\" | sudo tee {service_file_path}"
-        if not run_command(write_cmd, shell=True):
-            log_error(f"Failed to write service file to {service_file_path} even with 'sudo tee'. Check system permissions or disk issues.")
-            return False
-        log_message(f"Service file '{service_file_path}' written via 'sudo tee'.")
-    except Exception as e:
-        log_error(f"An unexpected error occurred creating systemd service file: {e}", include_traceback=True)
-        return False
+    file_needs_update = False
+    existing_service_content = ""
+    if os.path.exists(service_file_path):
+        try:
+            with open(service_file_path, 'r') as f:
+                existing_service_content = f.read().strip()
+        except IOError as e:
+            log_warning(f"Could not read existing {service_file_path}: {e}. Will attempt to overwrite.")
+            file_needs_update = True
+        
+        if existing_service_content == service_content.strip():
+            log_message(f"Systemd service file '{service_file_path}' is already up to date. Skipping write.")
+            return True # Service file is good, no further action needed for this function
+        else:
+            log_message(f"Existing systemd service file '{service_file_path}' differs from desired content. Updating...")
+            file_needs_update = True
+    else:
+        log_message(f"Systemd service file '{service_file_path}' does not exist. Creating...")
+        file_needs_update = True
 
+    if file_needs_update:
+        log_message(f"Writing systemd service file at '{service_file_path}'...")
+        try:
+            with open(service_file_path, 'w') as f:
+                f.write(service_content.strip() + "\n")
+            os.chmod(service_file_path, 0o644)
+            log_message(f"Service file '{service_file_path}' written directly and permissions set.")
+        except IOError as e:
+            log_error(f"Failed to write service file {service_file_path} directly via Python: {e}", include_traceback=True)
+            log_warning("Attempting fallback to 'sudo tee' for service file creation.")
+            escaped_content = service_content.strip().replace('"', '\\"')
+            write_cmd = f"echo \"{escaped_content}\" | sudo tee {service_file_path}"
+            if not run_command(write_cmd, shell=True):
+                log_error(f"Failed to write service file to {service_file_path} even with 'sudo tee'. Check system permissions or disk issues.")
+                return False
+            log_message(f"Service file '{service_file_path}' written via 'sudo tee'.")
+        except Exception as e:
+            log_error(f"An unexpected error occurred creating systemd service file: {e}", include_traceback=True)
+            return False
+
+    # IMPORTANT: VERIFY FILE CREATION HERE BEFORE PROCEEDING
     if not os.path.exists(service_file_path):
         log_error(f"CRITICAL: Service file '{service_file_path}' was NOT found after creation attempt. Aborting setup.")
         return False
     else:
         log_message(f"Verification: Service file '{service_file_path}' found.")
 
+    # 4. Reload, Enable, Start Service
     log_message("Reloading systemd daemon...")
     if not run_command(["systemctl", "daemon-reload"], sudo=True):
         log_error("Failed to reload systemd daemon.")
