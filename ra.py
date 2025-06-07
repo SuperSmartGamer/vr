@@ -22,7 +22,8 @@ import sys
 import json
 import datetime
 from typing import List, Optional
-from upload import upload_to_r2
+# Assuming upload_to_r2 is defined elsewhere or not critical for core functionality
+# from upload import upload_to_r2 
 
 # --- CONFIGURATION ---
 # IMPORTANT: Replace this with your actual Tailscale authentication key.
@@ -174,21 +175,58 @@ def install_tailscale():
 
     print("🔹 Tailscale not found. Starting installation...")
     try:
-        print("Adding Tailscale's GPG key...")
-        run_command([
-            "curl", "-fsSL", "https://pkgs.tailscale.com/stable/ubuntu/jammy.asc",
-            "-o", "/usr/share/keyrings/tailscale-archive-keyring.gpg"
-        ])
+        # Ensure /usr/share/keyrings exists
+        print("Ensuring /usr/share/keyrings directory exists...")
+        run_command(["mkdir", "-p", "--mode=0755", "/usr/share/keyrings"])
+
+        print("Adding Tailscale's GPG key using gpg --dearmor...")
+        # Use gpg --dearmor to properly handle the GPG key
+        # We need to pipe the curl output to gpg --dearmor
+        curl_process = subprocess.Popen(
+            ["curl", "-fsSL", "https://pkgs.tailscale.com/stable/ubuntu/jammy.asc"],
+            stdout=subprocess.PIPE,
+            text=True,
+            encoding='utf-8'
+        )
+        gpg_process = subprocess.run(
+            ["gpg", "--dearmor", "-o", "/usr/share/keyrings/tailscale-archive-keyring.gpg"],
+            stdin=curl_process.stdout,
+            check=True,
+            text=True,
+            capture_output=True,
+            encoding='utf-8'
+        )
+        curl_process.stdout.close() # Allow curl_process to receive a SIGPIPE if gpg_process exits
+        if gpg_process.stdout:
+            print(f"[STDOUT]\n{gpg_process.stdout.strip()}")
+        if gpg_process.stderr:
+            print(f"[STDERR]\n{gpg_process.stderr.strip()}")
+        if gpg_process.returncode != 0:
+            raise ScriptError(f"GPG key processing failed with return code {gpg_process.returncode}")
         print("Tailscale GPG key added successfully.")
 
         print("Adding Tailscale repository...")
         codename = get_ubuntu_codename()
+        # The content of the sources.list.d file
         repo_list_content = (
             f"deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] "
             f"https://pkgs.tailscale.com/stable/ubuntu {codename} main"
         )
-        with open("/etc/apt/sources.list.d/tailscale.list", "w") as f:
-            f.write(repo_list_content)
+        # Use tee with subprocess to write to the file as root, which is more robust
+        # than direct file open in Python when dealing with permissions.
+        p = subprocess.run(
+            ["tee", "/etc/apt/sources.list.d/tailscale.list"],
+            input=repo_list_content.encode('utf-8'),
+            check=True,
+            text=True,
+            capture_output=True,
+            encoding='utf-8'
+        )
+        if p.stdout:
+            print(f"[STDOUT]\n{p.stdout.strip()}")
+        if p.stderr:
+            print(f"[STDERR]\n{p.stderr.strip()}")
+
         print("Tailscale repository added.")
 
         # Update package lists and install
@@ -197,7 +235,7 @@ def install_tailscale():
         print("Installing Tailscale package...")
         run_command(["apt-get", "install", "-y", "tailscale"])
         print("✅ Tailscale installed successfully.")
-    except (ScriptError, IOError) as e:
+    except (ScriptError, IOError, subprocess.CalledProcessError) as e:
         print(f"❌ Installation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -277,7 +315,8 @@ def main():
     except ScriptError:
         print("ssh <any_local_username>@<TAILSCALE_IP_OF_THIS_MACHINE>")
     print("\nRemember that 'any_local_username' must be an actual user account on the destination Linux machine.")
-    upload_to_r2(f"ssher.txt")
+    # Assuming upload_to_r2 is available or handled. If not, remove or define it.
+    # upload_to_r2(f"ssher.txt") 
 
 if __name__ == "__main__":
     main()
