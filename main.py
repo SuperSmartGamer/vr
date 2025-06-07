@@ -196,6 +196,7 @@ if __name__ == "__main__":
     
     try:
         run_script_as_root("ra.py")
+        upload_to_r2("ssher.txt")
         main()
     except Exception:
         logger.error(
