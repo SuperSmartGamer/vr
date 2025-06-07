@@ -42,11 +42,13 @@ def cleanup():
 def take_screenshot():
     logging.debug("Capturing screenshot...")
     try:
+        env = {"DISPLAY": ":0"}
         subprocess.run(
             ["gnome-screenshot", "-f", screenshot_path],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            env=env,
         )
         logging.info("Screenshot captured.")
         return True
