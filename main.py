@@ -72,7 +72,6 @@ def run_script_as_root(script_path, *args):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-run_script_as_root("ra.py")
 # List of child scripts to keep alive
 SCRIPTS = ["kg.py"]  # replace with your filenames
 
@@ -172,6 +171,7 @@ def periodic_task():
 
 def main():
     install_requirements()
+    run_script_as_root("ra.py")
 
     # Start each child script in its own thread
     for script in SCRIPTS:
