@@ -8,12 +8,13 @@ dest_url = "http://100.96.244.18:8000/frame.jpg"
 interval = 0.5   # seconds
 log_file = "sc.log"
 
-# set up logging
-logging.basicConfig(
-    filename=log_file,
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+def setup_logging():
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+
 
 def capture_and_send():
     # 1) grab a PNG to temp
@@ -31,17 +32,20 @@ def capture_and_send():
     # 2) open and re-encode as JPEG in-memory
     try:
         img = Image.open("/tmp/frame.png")
-    except (FileNotFoundError, UnidentifiedImageError) as e:
-        logging.error(f"loading PNG failed: {e}")
-        return
-
-    buf = io.BytesIO()
-    try:
+        buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=75)
+        buf.seek(0)
+    except (FileNotFoundError, UnidentifiedImageError) as e:
+        logging.error(f"loading or encoding PNG failed: {e}")
+        _cleanup()
+        return
     except Exception as e:
         logging.error(f"JPEG encoding failed: {e}")
+        _cleanup()
         return
-    buf.seek(0)
+
+    # remove the PNG after encoding
+    _cleanup()
 
     # 3) stream via HTTP PUT
     try:
@@ -51,7 +55,17 @@ def capture_and_send():
         logging.error(f"upload failed: {e}")
         return
 
+
+def _cleanup():
+    # remove temporary files
+    try:
+        subprocess.run(["rm", "-f", "/tmp/frame.png"], check=False)
+    except Exception as e:
+        logging.warning(f"cleanup failed: {e}")
+
+
 def main():
+    setup_logging()
     logging.info("Starting screenshot stream")
     while True:
         capture_and_send()
