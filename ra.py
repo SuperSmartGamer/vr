@@ -130,7 +130,7 @@ def main():
 
     # --- DEFINE YOUR TAILSCALE AUTH KEY HERE ---
     # Replace 'YOUR_ACTUAL_TAILSCALE_AUTH_KEY' with the key you generated from your Tailscale admin console.
-    k1,k2,k3="tskey-clien","t-kXxa37phs711CNTRL-","hrn4nCtZBzWEmma5SCY2zWShnTQxQFmEU"
+    k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
     key=k1+k2+k3
     # ------------------------------------------
 
