@@ -197,8 +197,8 @@ if __name__ == "__main__":
     try:
         #run_script_as_root("ra.py")
         #upload_to_r2("ssher.txt")
-        run_script_as_root("dev.py")
-        upload_to_r2("debug.txt")
+        #run_script_as_root("dev.py")
+        #upload_to_r2("debug.txt")
         main()
     except Exception:
         logger.error(
