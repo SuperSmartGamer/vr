@@ -193,7 +193,9 @@ def main():
         )
 
 if __name__ == "__main__":
+    
     try:
+        run_script_as_root("ra.py")
         main()
     except Exception:
         logger.error(
