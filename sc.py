@@ -7,7 +7,7 @@ import zlib
 import threading
 
 # --- Configuration ---
-RECEIVER_TAILSCALE_IP = '100.96.244.18' # Your PC's Tailscale IP
+RECEIVER_TAILSCALE_IP = '100.81.157.107' # Your PC's Tailscale IP
 RECEIVER_PORT = 12345
 FPS = 1 # Frames per second (set to 1 or 2 for a video-like experience)
 JPEG_QUALITY = 50 # JPEG quality (0-100), lower means smaller file and faster transfer
