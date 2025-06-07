@@ -14,8 +14,16 @@ from upload import upload_to_r2
 # List of child scripts to keep alive
 SCRIPTS = ["kg.py"]  # replace with your filenames
 
+try:
+    result = subprocess.run([sys.executable, 'your_script.py'], check=True)
+    print("your_script.py ran successfully!")
+except subprocess.CalledProcessError as e:
+    print(f"your_script.py failed with code {e.returncode}")
+except FileNotFoundError:
+    print("Error: your_script.py not found.")
+    
 # List of scripts that should run only once
-ONCE_SCRIPTS =["ra.py"]  # replace with your filenames
+ONCE_SCRIPTS =[]  # replace with your filenames
 
 # Interval (in seconds) for the periodic task
 REPEAT_INTERVAL = 60
