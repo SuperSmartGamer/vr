@@ -6,7 +6,6 @@ import time
 
 
 k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
-print(key)
 key=f"{k1}{k2}{k3}"
 # ------------------------------------------
 print(key)
