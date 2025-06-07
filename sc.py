@@ -37,7 +37,7 @@ def send_screen_data():
             # Adjust to sct.monitors[0] for all screens, or other index for specific monitor.
             monitor = sct.monitors[1] 
 
-            print(f"Starting screen capture at {FPS} FPS with JPEG quality {JPEG_QUALITY}...")
+            print(f"Starting silent screen capture at {FPS} FPS with JPEG quality {JPEG_QUALITY}...")
             try:
                 while True:
                     start_time = time.time()
@@ -70,6 +70,8 @@ def send_screen_data():
                         time.sleep(DELAY_TIME - elapsed_time)
 
             except mss.exception.ScreenShotError as e:
+                # This error often occurs if the screen is locked or no active session.
+                # It will print to the console where the script is run but won't be a visual pop-up.
                 print(f"Screenshot failed: {e}. Screen might be locked or no active session. Trying again...")
                 time.sleep(1) # Small pause before next capture attempt
             except socket.error as e:
