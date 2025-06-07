@@ -4,9 +4,9 @@ import time
 import sys
 
 # --- Configuration ---
-RECEIVER_TAILSCALE_IP = '100.96.244.18' # Your PC's Tailscale IP (from your Tailscale console)
-RECEIVER_PORT = 8000 # Must match the port the receiver's HTTP server is listening on
-FPS = 1 # Frames per second (e.g., 1 for 1 FPS, 2 for 2 FPS)
+RECEIVER_TAILSCALE_IP = '100.96.244.18' # Your PC's Tailscale IP
+RECEIVER_PORT = 8000 # This must match the port the receiver's HTTP server is listening on
+FPS = 1 # Frames per second (1 or 2 is good for remote streaming)
 JPEG_QUALITY = 60 # JPEG quality (0-100). 60-75 is a good balance for compression/quality.
 
 CAPTURE_DIR = "/tmp" # Temporary directory for screenshots
@@ -16,51 +16,50 @@ FULL_PATH = os.path.join(CAPTURE_DIR, SCREENSHOT_NAME)
 # Calculate delay in seconds for desired FPS
 DELAY_SECONDS = 1 / FPS
 
-def run_command(command_args, capture_output_and_check=False, suppress_stderr_if_no_error=True):
+def run_command(command_args, capture_output=False, print_output=False, suppress_stderr=True):
     """
     Helper function to run shell commands using subprocess.run().
     command_args: List of command and its arguments.
-    capture_output_and_check: If True, stdout and stderr are captured, and an error is raised on non-zero exit.
-                              Otherwise, outputs are streamed/printed, and an error is raised on non-zero exit.
-    suppress_stderr_if_no_error: If True, stderr is redirected to /dev/null if the command succeeds.
-                                 If the command fails, stderr is always captured and printed.
+    capture_output: If True, stdout and stderr are captured and returned.
+    print_output: If True, stdout is printed live.
+    suppress_stderr: If True, stderr is redirected to /dev/null unless command fails.
     """
-    current_env = os.environ.copy() # Explicitly copy the current environment
+    # Explicitly copy the current environment to pass to the subprocess.
+    # This is CRUCIAL for graphical applications like gnome-screenshot in an SSH -X session.
+    current_env = os.environ.copy()
+
+    stdout_pipe = subprocess.PIPE if capture_output or print_output else None
+    stderr_pipe = subprocess.PIPE if capture_output or not suppress_stderr else subprocess.DEVNULL
 
     try:
-        if capture_output_and_check:
-            # When check=True and capture_output=True, stdout and stderr are captured.
-            result = subprocess.run(command_args, capture_output=True, text=True, check=True, env=current_env)
-            return result.stdout.strip()
-        else:
-            # Here, we don't use capture_output=True if we want to print or suppress selectively.
-            # Instead, we define stdout/stderr behavior.
-            stdout_target = subprocess.PIPE # Always capture stdout to print if needed
-            stderr_target = subprocess.DEVNULL if suppress_stderr_if_no_error else subprocess.PIPE
-            
-            result = subprocess.run(command_args, stdout=stdout_target, stderr=stderr_target, text=True, check=True, env=current_env)
-            
-            if result.stdout:
-                print(f"Command STDOUT: {result.stdout.strip()}")
-            
-            if result.stderr:
-                # If command succeeded and we wanted to suppress stderr for success, this means stderr had unexpected output
-                if result.returncode == 0 and suppress_stderr_if_no_error:
-                    print(f"Command unexpectedly produced STDERR: {result.stderr.strip()}")
-                else: # Command failed or we explicitly wanted to see stderr
-                    print(f"Command STDERR: {result.stderr.strip()}")
-            
-            return True
-    except subprocess.CalledProcessError as e:
-        print(f"Command failed with exit code {e.returncode}: {' '.join(e.cmd)}")
-        print(f"STDOUT: {e.stdout.strip()}")
-        print(f"STDERR: {e.stderr.strip()}") # Always print stderr on failure for debugging
-        return False
+        process = subprocess.Popen(command_args, stdout=stdout_pipe, stderr=stderr_pipe, text=True, env=current_env)
+        stdout, stderr = process.communicate() # Wait for process to complete
+
+        if print_output and stdout:
+            print(f"Command STDOUT: {stdout.strip()}")
+
+        if stderr:
+            # Always print stderr if command failed, or if not suppressing
+            if process.returncode != 0 or not suppress_stderr:
+                print(f"Command STDERR: {stderr.strip()}")
+            elif stdout: # If command succeeded but had unexpected stderr, print it
+                print(f"Command unexpectedly produced STDERR: {stderr.strip()}")
+
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, command_args, stdout, stderr)
+
+        return stdout.strip() if capture_output else True
+
     except FileNotFoundError:
-        print(f"Error: Command '{command_args[0]}' not found. Please ensure it's installed and in PATH for Michael's user.")
+        print(f"ERROR: Command '{command_args[0]}' not found. Make sure it's installed and in your PATH.")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"COMMAND FAILED (Exit Code {e.returncode}): {' '.join(e.cmd)}")
+        print(f"STDOUT: {e.stdout.strip()}")
+        print(f"STDERR: {e.stderr.strip()}")
         return False
     except Exception as e:
-        print(f"An unexpected error occurred while running command '{command_args[0]}': {e}")
+        print(f"AN UNEXPECTED ERROR OCCURRED during '{' '.join(command_args)}': {e}")
         return False
 
 def check_dependencies():
@@ -68,14 +67,17 @@ def check_dependencies():
     Checks if gnome-screenshot and curl are available.
     """
     print("Checking dependencies...")
-    # For 'which' command, we explicitly want its output, so capture_output_and_check=True
-    if not run_command(["which", "gnome-screenshot"], capture_output_and_check=True):
-        print("Error: 'gnome-screenshot' not found in PATH. Ensure it's installed and you're running this script as the correct user.")
+    # For 'which' command, we explicitly want its output, so capture it.
+    if not run_command(["which", "gnome-screenshot"], capture_output=True, suppress_stderr=True):
+        print("Error: 'gnome-screenshot' not found. Please install GNOME Screenshot (e.g., 'sudo apt install gnome-screenshot').")
         sys.exit(1)
-    if not run_command(["which", "curl"], capture_output_and_check=True):
-        print("Error: 'curl' not found in PATH. Ensure it's installed.")
+    print("'gnome-screenshot' found.")
+
+    if not run_command(["which", "curl"], capture_output=True, suppress_stderr=True):
+        print("Error: 'curl' not found. Please install curl (e.g., 'sudo apt install curl').")
         sys.exit(1)
-    print("Dependencies checked successfully.")
+    print("'curl' found.")
+    print("All dependencies checked successfully.")
 
 
 def send_screen_data():
@@ -98,9 +100,8 @@ def send_screen_data():
         ]
         
         print(f"Capturing screen to {FULL_PATH} with gnome-screenshot...")
-        # gnome-screenshot can be noisy on stderr even when successful, so we suppress it for stealth.
-        # If it fails, run_command will catch the non-zero exit code and print full error.
-        capture_success = run_command(screenshot_command_args, suppress_stderr_if_no_error=True)
+        # Suppress stderr for gnome-screenshot as it can be noisy even when successful.
+        capture_success = run_command(screenshot_command_args, suppress_stderr=True)
 
         if capture_success and os.path.exists(FULL_PATH) and os.path.getsize(FULL_PATH) > 0:
             print("Screenshot taken successfully.")
@@ -115,16 +116,19 @@ def send_screen_data():
             ]
             
             print(f"Sending image to {RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT}...")
-            # For curl, we want to see stderr if there's a problem, so don't suppress.
-            send_success = run_command(curl_command_args, suppress_stderr_if_no_error=False) 
+            # Do NOT suppress stderr for curl, so you'll see any network errors.
+            send_success = run_command(curl_command_args, suppress_stderr=False) 
 
             if send_success:
                 print("Image sent successfully.")
             else:
                 print("Failed to send image via curl.")
         else:
-            print("Screenshot capture failed. This could be due to a locked screen, no active GUI session, or insufficient permissions.")
-            print("Ensure Michael is logged into the graphical desktop and that 'gnome-screenshot' works manually as his user.")
+            print("Screenshot capture failed. This likely means:")
+            print("  - Michael is not logged into his graphical desktop.")
+            print("  - Your SSH session did not have X11 forwarding enabled/working ('ssh -X' was not used or failed).")
+            print("  - The screen might be locked.")
+            print("Please ensure Michael is logged in and your SSH -X setup is correct.")
             
         # 3. Delete the temporary screenshot file
         if os.path.exists(FULL_PATH):
@@ -151,12 +155,12 @@ if __name__ == "__main__":
     print("\n----------------------------------------------------------------------")
     print("              TAILSCALE SCREEN SHARE SENDER SCRIPT")
     print("----------------------------------------------------------------------")
-    print("1. **CRITICAL: Ensure Michael is LOGGED INTO THE ZORIN OS GRAPHICAL DESKTOP.**")
-    print("   This script captures his live screen.")
-    print("2. **ABSOLUTELY DO NOT USE 'sudo' TO RUN THIS SCRIPT.**")
-    print("   Running with 'sudo' will prevent access to Michael's graphical display.")
-    print("   Run this script from a **TERMINAL OPENED WITHIN HIS ZORIN GUI SESSION.**")
-    print("3. To run silently in the background after starting, use:")
-    print("   `nohup python3 sender_script.py &` then you can close the terminal.")
+    print("This script captures Michael's live graphical screen.")
+    print("1. **Michael MUST be LOGGED INTO THE ZORIN OS GRAPHICAL DESKTOP.**")
+    print("2. **You MUST connect via SSH with X11 forwarding enabled (e.g., `ssh -X michael@<IP>`).**")
+    print("   Verify by running `echo $DISPLAY` in your SSH session; it should show a value like `localhost:10.0`.")
+    print("3. **DO NOT USE `sudo`** to run this Python script.")
+    print("4. For background operation (recommended), use:")
+    print("   `nohup python3 sender_script.py &` then you can close the SSH terminal.")
     print("----------------------------------------------------------------------\n")
     send_screen_data()
