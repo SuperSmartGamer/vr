@@ -9,7 +9,7 @@ in the Tailscale Admin Console) for broad access.
 
 This script performs the following actions:
 1. Verifies it is run with root privileges.
-2. Checks for and installs Tailscale if it's missing.
+2. Checks for and installs Tailscale if it's missing using the official Tailscale install script.
 3. Authenticates the device to a Tailscale network using a provided auth key.
 4. Enables the Tailscale SSH server.
 
@@ -22,9 +22,10 @@ import sys
 import json
 import datetime
 from typing import List, Optional
-# Assuming upload_to_r2 is defined elsewhere or not critical for core functionality
+
+# Assuming upload_to_r2 is defined elsewhere or not critical for core functionality.
 # If you have an `upload.py` with `upload_to_r2`, uncomment the line below.
-# from upload import upload_to_r2 
+# from upload import upload_to_r2
 
 # --- CONFIGURATION ---
 # IMPORTANT: Replace this with your actual Tailscale authentication key.
@@ -58,9 +59,9 @@ class Tee:
         self.primary_stream.write(data)
         self.secondary_stream.write(data)
 
-    def flush(self):
-        self.primary_stream.flush()
-        self.secondary_stream.flush()
+    def flush(self, *args, **kwargs):
+        self.primary_stream.flush(*args, **kwargs)
+        self.secondary_stream.flush(*args, **kwargs)
 
 
 def setup_logging():
@@ -68,42 +69,34 @@ def setup_logging():
     Sets up logging to redirect stdout and stderr to 'ssher.txt'
     in the script's directory, while also printing to the console.
     """
-    # Get the directory of the current script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     log_file_path = os.path.join(script_dir, "ssher.txt")
 
     try:
-        # Open the log file in append mode ('a') for continuous logging
-        # buffering=1 means line-buffered, which is good for real-time viewing
         log_file = open(log_file_path, "a", buffering=1, encoding='utf-8')
     except IOError as e:
-        # If the log file cannot be opened, print an error and continue without file logging
         print(f"Error: Could not open log file '{log_file_path}' for writing: {e}", file=sys.stderr)
         return
 
-    # Store original stdout and stderr to restore them later if needed (though not implemented here)
-    # original_stdout = sys.stdout
-    # original_stderr = sys.stderr
-
-    # Create Tee objects to redirect output
     sys.stdout = Tee(sys.stdout, log_file)
     sys.stderr = Tee(sys.stderr, log_file)
 
-    # Add a header to the log file for each run
     print(f"\n--- Log started at {datetime.datetime.now()} ---")
     print(f"All output for this run will be saved to: {log_file_path}")
 
 
 def run_command(
-    command: List[str], capture_output: bool = False
+    command: List[str] or str, capture_output: bool = False, shell: bool = False
 ) -> Optional[str]:
     """
     Executes a shell command safely and returns its output.
     Logs the command being executed and its stdout/stderr.
 
     Args:
-        command: The command and its arguments as a list of strings.
+        command: The command and its arguments as a list of strings (preferred)
+                 or a string if shell=True.
         capture_output: If True, returns the command's stdout.
+        shell: If True, executes the command through the shell.
 
     Returns:
         The command's stdout as a string if capture_output is True, else None.
@@ -111,36 +104,35 @@ def run_command(
     Raises:
         ScriptError: If the command returns a non-zero exit code.
     """
-    # Print the command being executed for logging
-    print(f"\n[COMMAND] Executing: {' '.join(command)}")
+    cmd_display = command if isinstance(command, str) else ' '.join(command)
+    print(f"\n[COMMAND] Executing: {cmd_display}")
     try:
         process = subprocess.run(
             command,
             check=True,
             text=True,
             capture_output=True, # Always capture output to log it
-            encoding='utf-8'
+            encoding='utf-8',
+            shell=shell
         )
         if process.stdout:
-            # Log standard output from the command
             print(f"[STDOUT]\n{process.stdout.strip()}")
         if process.stderr:
-            # Log standard error from the command, even if successful
             print(f"[STDERR]\n{process.stderr.strip()}")
         if capture_output:
             return process.stdout.strip()
         return None
     except FileNotFoundError:
-        error_msg = f"Error: Command not found: '{command[0]}'. Is it in the system's PATH?"
-        print(f"❌ {error_msg}", file=sys.stderr) # Print to both console and log
+        error_msg = f"Error: Command not found: '{command[0] if isinstance(command, list) else command}'. Is it in the system's PATH?"
+        print(f"❌ {error_msg}", file=sys.stderr)
         raise ScriptError(error_msg)
     except subprocess.CalledProcessError as e:
         error_message = (
-            f"Command '{' '.join(command)}' failed with return code {e.returncode}.\n"
+            f"Command '{cmd_display}' failed with return code {e.returncode}.\n"
             f"STDOUT: {e.stdout.strip()}\n"
             f"STDERR: {e.stderr.strip()}"
         )
-        print(f"❌ {error_message}", file=sys.stderr) # Print to both console and log
+        print(f"❌ {error_message}", file=sys.stderr)
         raise ScriptError(error_message)
 
 
@@ -156,109 +148,23 @@ def is_package_installed(package_name: str) -> bool:
         return False
 
 
-def get_ubuntu_codename() -> str:
-    """Gets the Ubuntu release codename for the Tailscale repository."""
-    print("Attempting to determine Ubuntu codename...")
-    try:
-        codename = run_command(["lsb_release", "-cs"], capture_output=True)
-        print(f"Detected Ubuntu codename: '{codename}'.")
-        return codename
-    except ScriptError as e:
-        print(f"Warning: Could not determine Ubuntu codename. Falling back to 'jammy'. Error: {e}")
-        return "jammy"
-
-
 def install_tailscale():
-    """Installs Tailscale on the system if not already present."""
+    """Installs Tailscale on the system using the official one-liner script."""
     if is_package_installed("tailscale"):
         print("✅ Tailscale is already installed.")
         return
 
-    print("🔹 Tailscale not found. Starting installation...")
+    print("🔹 Tailscale not found. Starting installation using official script...")
     try:
-        # Check if gnupg is installed, and install if not
-        print("Checking if 'gnupg' is installed...")
-        if not is_package_installed("gnupg"):
-            print("❗ 'gnupg' not found. Installing it now...")
-            run_command(["apt-get", "update"]) # Ensure apt-get is up-to-date before installing gnupg
-            run_command(["apt-get", "install", "-y", "gnupg"])
-            print("✅ 'gnupg' installed successfully.")
-        else:
-            print("✅ 'gnupg' is already installed.")
-
-        # Ensure /usr/share/keyrings exists
-        print("Ensuring /usr/share/keyrings directory exists...")
-        run_command(["mkdir", "-p", "--mode=0755", "/usr/share/keyrings"])
-
-        print("Adding Tailscale's GPG key using gpg --dearmor...")
-        # Use gpg --dearmor to properly handle the GPG key
-        # We need to pipe the curl output to gpg --dearmor
-        # Using subprocess.Popen for curl to manage its stdout as a pipe
-        curl_process = subprocess.Popen(
-            ["curl", "-fsSL", "https://pkgs.tailscale.com/stable/ubuntu/jammy.asc"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, # Capture stderr for curl for better error messages
-            text=True,
-            encoding='utf-8'
-        )
-        # Using subprocess.run for gpg to read from curl's stdout
-        gpg_process = subprocess.run(
-            ["gpg", "--dearmor", "-o", "/usr/share/keyrings/tailscale-archive-keyring.gpg"],
-            stdin=curl_process.stdout,
-            check=True,
-            text=True,
-            capture_output=True, # Capture output of gpg for logging
-            encoding='utf-8'
-        )
-        # Close curl's stdout to prevent deadlocks and allow curl to exit cleanly
-        curl_process.stdout.close() 
-        # Wait for curl_process to finish, important for proper error handling of the pipe
-        curl_process.wait()
-
-        # Check curl's return code after it has finished
-        if curl_process.returncode != 0:
-            raise ScriptError(f"Curl failed with return code {curl_process.returncode}. STDERR: {curl_process.stderr.strip()}")
-
-        if gpg_process.stdout:
-            print(f"[STDOUT]\n{gpg_process.stdout.strip()}")
-        if gpg_process.stderr:
-            print(f"[STDERR]\n{gpg_process.stderr.strip()}")
-        if gpg_process.returncode != 0:
-            raise ScriptError(f"GPG key processing failed with return code {gpg_process.returncode}")
-        print("Tailscale GPG key added successfully.")
-
-        print("Adding Tailscale repository...")
-        codename = get_ubuntu_codename()
-        # The content of the sources.list.d file
-        repo_list_content = (
-            f"deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] "
-            f"https://pkgs.tailscale.com/stable/ubuntu {codename} main"
-        )
-        # Use tee with subprocess to write to the file as root, which is more robust
-        # than direct file open in Python when dealing with permissions.
-        p = subprocess.run(
-            ["tee", "/etc/apt/sources.list.d/tailscale.list"],
-            input=repo_list_content.encode('utf-8'), # Input must be bytes
-            check=True,
-            text=True,
-            capture_output=True,
-            encoding='utf-8'
-        )
-        if p.stdout:
-            print(f"[STDOUT]\n{p.stdout.strip()}")
-        if p.stderr:
-            print(f"[STDERR]\n{p.stderr.strip()}")
-
-        print("Tailscale repository added.")
-
-        # Update package lists and install
-        print("Updating package lists...")
-        run_command(["apt-get", "update"])
-        print("Installing Tailscale package...")
-        run_command(["apt-get", "install", "-y", "tailscale"])
-        print("✅ Tailscale installed successfully.")
-    except (ScriptError, IOError, subprocess.CalledProcessError) as e:
-        print(f"❌ Installation failed: {e}", file=sys.stderr)
+        # The official Tailscale installation one-liner
+        install_command = "curl -fsSL https://tailscale.com/install.sh | sh"
+        
+        print("Executing Tailscale's official installation script...")
+        run_command(install_command, shell=True) # Use shell=True for the pipe
+        
+        print("✅ Tailscale installed successfully via official script.")
+    except ScriptError as e:
+        print(f"❌ Tailscale installation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
 
