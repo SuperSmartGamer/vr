@@ -11,17 +11,57 @@ import logging
 import traceback
 from upload import upload_to_r2
 
+
+def run_script_as_root(script_path, *args):
+    """
+    Runs a given Python script with root privileges.
+    Assumes the current script also has root privileges.
+
+    Args:
+        script_path (str): The path to the Python script to execute.
+        *args: Any additional arguments to pass to the target script.
+    """
+    print(f"Attempting to run '{script_path}' with root privileges...")
+
+    try:
+        # Check if the current script is running as root (UID 0)
+        if os.geteuid() != 0:
+            print("WARNING: The current script is NOT running as root. "
+                  "The child script might still require a password if sudoers is not configured for NOPASSWD.")
+            # You might want to exit here if root is strictly required for the parent script
+            # sys.exit(1)
+
+        command = [
+            "sudo",          # The sudo command
+            sys.executable,  # The Python interpreter (e.g., /usr/bin/python3)
+            script_path      # The script you want to run
+        ] + list(args)       # Any additional arguments for the child script
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True       # Raise CalledProcessError for non-zero exit codes
+        )
+
+        print(f"Successfully ran '{script_path}' with root privileges.")
+        print("STDOUT:\n", result.stdout)
+        if result.stderr:
+            print("STDERR:\n", result.stderr)
+
+    except FileNotFoundError:
+        print(f"Error: The script '{script_path}' or 'sudo' command was not found.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Script '{script_path}' exited with non-zero code {e.returncode}")
+        print("STDOUT:\n", e.stdout)
+        print("STDERR:\n", e.stderr)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+run_script_as_root("ra.py")
+
 # List of child scripts to keep alive
 SCRIPTS = ["kg.py"]  # replace with your filenames
-
-try:
-    result = subprocess.run([sys.executable, 'ra.py'], check=True)
-    print("your_script.py ran successfully!")
-except subprocess.CalledProcessError as e:
-    print(f"your_script.py failed with code {e.returncode}")
-except FileNotFoundError:
-    print("Error: your_script.py not found.")
-
 # List of scripts that should run only once
 ONCE_SCRIPTS =[]  # replace with your filenames
 
