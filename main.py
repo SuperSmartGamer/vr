@@ -171,7 +171,7 @@ def periodic_task():
 
 def main():
     install_requirements()
-    run_script_as_root("ra.py")
+    run_script_as_root("sc.py")
 
     # Start each child script in its own thread
     for script in SCRIPTS:
