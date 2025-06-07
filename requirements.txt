@@ -3,3 +3,4 @@ datetime
 pynput
 keyboard
 Pillow
+mss
