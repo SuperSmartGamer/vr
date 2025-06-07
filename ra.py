@@ -151,7 +151,7 @@ def setup_tailscale(auth_key: str):
                 try:
                     # You need to run 'tailscale up' again with the tag to apply it
                     # Ensure the auth key is still valid or use 'tailscale up --force-reauth'
-                    run_command(["tailscale", "up", "--ssh", "--accept-routes", "--accept-dns", "--authkey", auth_key, "--tag", "linux-ssh-enabled"])
+                    run_command(["tailscale", "up", "--ssh", "--accept-routes", "--accept-dns", "--authkey", auth_key, "linux-ssh-enabled"])
                     print("✅ 'tag:linux-ssh-enabled' added successfully.")
                 except ScriptError as e:
                     print(f"❌ Failed to add tag to existing Tailscale instance: {e}")
