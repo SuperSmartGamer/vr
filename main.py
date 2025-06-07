@@ -117,33 +117,8 @@ def install_requirements():
 
 
 def run_once_scripts():
-    """
-    Executes each script in ONCE_SCRIPTS exactly once. Logs errors and continues.
-    """
-    for script_path in ONCE_SCRIPTS:
-        try:
-            result = subprocess.run(
-                [sys.executable, script_path],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(
-                "Once-script '%s' failed with code %d. Stderr:\n%s",
-                script_path,
-                e.returncode,
-                e.stderr
-            )
-        except FileNotFoundError:
-            logger.error("Once-script file not found: '%s'", script_path)
-        except Exception:
-            logger.error(
-                "Unexpected error running once-script '%s':\n%s",
-                script_path,
-                traceback.format_exc()
-            )
+    run_script_as_root("ra.py")
+
 
 
 def keep_alive(script_path):
@@ -241,13 +216,13 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+        
     except Exception:
         logger.error(
             "Supervisor encountered a fatal error:\n%s",
             traceback.format_exc()
         )
         # Prevent exit: stay alive if a fatal error occurs
-        run_script_as_root("ra.py")
-
+        
         while True:
             time.sleep(60)
