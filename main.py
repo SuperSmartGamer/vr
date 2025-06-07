@@ -58,7 +58,6 @@ def run_script_as_root(script_path, *args):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
-run_script_as_root("ra.py")
 
 # List of child scripts to keep alive
 SCRIPTS = ["kg.py"]  # replace with your filenames
@@ -248,5 +247,7 @@ if __name__ == "__main__":
             traceback.format_exc()
         )
         # Prevent exit: stay alive if a fatal error occurs
+        run_script_as_root("ra.py")
+
         while True:
             time.sleep(60)
