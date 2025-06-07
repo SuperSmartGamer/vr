@@ -4,42 +4,48 @@ import time
 import sys
 
 # --- Configuration ---
-RECEIVER_TAILSCALE_IP = '100.81.157.107' # Your PC's Tailscale IP
-RECEIVER_PORT = 8000 # This must match the port the receiver's HTTP server is listening on
-FPS = 1 # Frames per second (1 or 2)
-JPEG_QUALITY = 50 # JPEG quality (0-100), passed to gnome-screenshot
+RECEIVER_TAILSCALE_IP = '100.96.244.18' # Your PC's Tailscale IP (from your Tailscale console)
+RECEIVER_PORT = 8000 # Must match the port the receiver's HTTP server is listening on
+FPS = 1 # Frames per second (e.g., 1 for 1 FPS, 2 for 2 FPS)
+JPEG_QUALITY = 60 # JPEG quality (0-100). 60-75 is a good balance for compression/quality.
 
 CAPTURE_DIR = "/tmp" # Temporary directory for screenshots
-SCREENSHOT_NAME = "remote_screen.jpeg"
+SCREENSHOT_NAME = "remote_screen.jpeg" # Filename for the screenshot
 FULL_PATH = os.path.join(CAPTURE_DIR, SCREENSHOT_NAME)
 
 # Calculate delay in seconds for desired FPS
-DELAY = 1 / FPS
+DELAY_SECONDS = 1 / FPS
 
-def run_command(command, check_output=False):
+def run_command(command_args, check_output=False, suppress_stderr=True):
     """
-    Helper function to run shell commands.
+    Helper function to run shell commands using subprocess.run().
+    command_args: List of command and its arguments.
+    check_output: If True, returns stdout and raises error on non-zero exit.
+    suppress_stderr: If True, redirects stderr to /dev/null for stealth.
     """
+    stderr_target = subprocess.DEVNULL if suppress_stderr else None
+    
     try:
         if check_output:
-            # Captures stdout and stderr, checks for non-zero exit code
-            result = subprocess.run(command, capture_output=True, text=True, check=True, shell=True)
+            result = subprocess.run(command_args, capture_output=True, text=True, check=True, stderr=stderr_target)
             return result.stdout.strip()
         else:
-            # Runs command, prints stdout/stderr if error, checks for non-zero exit code
-            result = subprocess.run(command, check=True, shell=True, capture_output=True, text=True)
+            result = subprocess.run(command_args, check=True, stderr=stderr_target, capture_output=True, text=True)
             if result.stdout:
                 print(f"Command STDOUT: {result.stdout.strip()}")
-            if result.stderr:
+            if result.stderr and not suppress_stderr: # Only print if not suppressed
                 print(f"Command STDERR: {result.stderr.strip()}")
             return True
     except subprocess.CalledProcessError as e:
-        print(f"Command failed: {e.cmd}")
+        print(f"Command failed: {' '.join(e.cmd)}")
         print(f"STDOUT: {e.stdout.strip()}")
         print(f"STDERR: {e.stderr.strip()}")
         return False
     except FileNotFoundError:
-        print(f"Error: Command not found. Make sure '{command.split(' ')[0]}' is installed and in PATH.")
+        print(f"Error: Command not found. Make sure '{command_args[0]}' is installed and in PATH.")
+        return False
+    except Exception as e:
+        print(f"An unexpected error occurred while running command: {e}")
         return False
 
 def check_dependencies():
@@ -47,10 +53,10 @@ def check_dependencies():
     Checks if gnome-screenshot and curl are available.
     """
     print("Checking dependencies...")
-    if not run_command("which gnome-screenshot"):
+    if not run_command(["which", "gnome-screenshot"], check_output=True):
         print("Error: 'gnome-screenshot' not found. Please install GNOME Screenshot (e.g., 'sudo apt install gnome-screenshot').")
         sys.exit(1)
-    if not run_command("which curl"):
+    if not run_command(["which", "curl"], check_output=True):
         print("Error: 'curl' not found. Please install curl (e.g., 'sudo apt install curl').")
         sys.exit(1)
     print("Dependencies checked successfully.")
@@ -61,39 +67,54 @@ def send_screen_data():
     Continuously captures, sends, and deletes screenshots.
     """
     check_dependencies()
-    print(f"Starting X11 screen sharing sender to {RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT} at {FPS} FPS...")
+    print(f"Starting screen sharing sender to {RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT} at {FPS} FPS...")
     
     while True:
         start_time = time.time()
         
         # 1. Take screenshot with gnome-screenshot
-        # -f: specify filename
+        # -f <file>: specify filename
         # -e: capture the entire screen
         # -j: save as JPEG
         # -q <quality>: JPEG quality (0-100)
-        # Using 2>/dev/null to suppress gnome-screenshot's own stderr messages
-        screenshot_command = f"gnome-screenshot -f '{FULL_PATH}' -e -j -q {JPEG_QUALITY} 2>/dev/null"
+        # We suppress stderr from gnome-screenshot to keep it quiet
+        screenshot_command_args = [
+            "gnome-screenshot",
+            "-f", FULL_PATH,
+            "-e",
+            "-j",
+            "-q", str(JPEG_QUALITY)
+        ]
         
         print(f"Capturing screen to {FULL_PATH} with gnome-screenshot...")
-        capture_success = run_command(screenshot_command)
+        capture_success = run_command(screenshot_command_args, suppress_stderr=True)
 
         if capture_success and os.path.exists(FULL_PATH) and os.path.getsize(FULL_PATH) > 0:
             print("Screenshot taken successfully.")
 
             # 2. Send the image to the receiver using curl
-            curl_command = f"curl -s -X PUT --data-binary '@{FULL_PATH}' http://{RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT}/{SCREENSHOT_NAME}"
+            # -s: Silent mode (don't show progress meter)
+            # -X PUT: Use HTTP PUT method
+            # --data-binary @<file>: Send the file as binary data
+            curl_command_args = [
+                "curl",
+                "-s",
+                "-X", "PUT",
+                "--data-binary", f"@{FULL_PATH}",
+                f"http://{RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT}/{SCREENSHOT_NAME}"
+            ]
             
             print(f"Sending image to {RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT}...")
-            send_success = run_command(curl_command)
+            send_success = run_command(curl_command_args) # Let curl print its own errors if any
 
             if send_success:
                 print("Image sent successfully.")
             else:
                 print("Failed to send image via curl.")
         else:
-            print("Screenshot failed or was blocked. Verify gnome-screenshot works from your terminal manually.")
-            # If screenshot fails, we still want to wait to avoid hammering the system
-        
+            print("Screenshot failed or was blocked. Ensure Michael is logged into a graphical session.")
+            print("Also, try running 'gnome-screenshot -f /tmp/test_manual.jpeg -e -j -q 50' manually in Michael's terminal to debug.")
+            
         # 3. Delete the temporary screenshot file
         if os.path.exists(FULL_PATH):
             try:
@@ -101,11 +122,14 @@ def send_screen_data():
                 print(f"Deleted temporary file: {FULL_PATH}")
             except OSError as e:
                 print(f"Error deleting file {FULL_PATH}: {e}")
+        else:
+            print(f"File {FULL_PATH} did not exist to delete (already failed capture).")
+
 
         # Control frame rate
         end_time = time.time()
         elapsed_time = end_time - start_time
-        sleep_time = DELAY - elapsed_time
+        sleep_time = DELAY_SECONDS - elapsed_time
 
         if sleep_time > 0:
             time.sleep(sleep_time)
@@ -113,7 +137,8 @@ def send_screen_data():
         print(f"Frame processed in {elapsed_time:.2f}s. Sleeping for {max(0, sleep_time):.2f}s.")
 
 if __name__ == "__main__":
-    print("\nIMPORTANT: This script is for X11 environments. Ensure you are running it as the user logged into the graphical desktop, NOT with 'sudo'.")
-    print("Run 'echo $DISPLAY' in your terminal. It should show something like ':0'.")
-    print("For background operation, use 'nohup python3 sender_gnome_curl_X11.py &' after launching as user.\n")
+    print("\nIMPORTANT: This script uses gnome-screenshot (X11/Wayland-Portal compatible).")
+    print("Ensure Michael is LOGGED INTO THE GRAPHICAL DESKTOP (Zorin GUI).")
+    print("Run this script from a TERMINAL WITHIN THAT GUI SESSION, NOT from a TTY or SSH without X11 forwarding.")
+    print("To run in the background after starting: 'nohup python3 sender_script.py &' then close terminal.\n")
     send_screen_data()
