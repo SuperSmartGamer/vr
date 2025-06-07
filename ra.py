@@ -131,9 +131,10 @@ def main():
     # --- DEFINE YOUR TAILSCALE AUTH KEY HERE ---
     # Replace 'YOUR_ACTUAL_TAILSCALE_AUTH_KEY' with the key you generated from your Tailscale admin console.
     k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
-    key=k1+k2+k3
+    print(key)
+    key=f"{k1}{k2}{k3}"
     # ------------------------------------------
-
+    print(key)
     if key == 'YOUR_ACTUAL_TAILSCALE_AUTH_KEY' or not key:
         print("ERROR: Please replace 'YOUR_ACTUAL_TAILSCALE_AUTH_KEY' with your actual Tailscale auth key in the script.")
         sys.exit(1)
