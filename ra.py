@@ -12,12 +12,16 @@ This script performs the following actions:
 2. Checks for and installs Tailscale if it's missing.
 3. Authenticates the device to a Tailscale network using a provided auth key.
 4. Enables the Tailscale SSH server.
+
+All terminal output (stdout and stderr) will also be saved to 'ssher.txt'
+in the same directory as this script.
 """
 
 import subprocess
 import os
 import sys
 import json
+import datetime
 from typing import List, Optional
 
 # --- CONFIGURATION ---
@@ -31,6 +35,7 @@ from typing import List, Optional
 k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
 key=f"{k1}{k2}{k3}"
 TAILSCALE_AUTH_KEY =key
+
 # --- END CONFIGURATION ---
 
 
@@ -39,11 +44,60 @@ class ScriptError(Exception):
     pass
 
 
+class Tee:
+    """
+    A class to redirect stdout/stderr to both a file and the original stream.
+    """
+    def __init__(self, primary_stream, secondary_stream):
+        self.primary_stream = primary_stream
+        self.secondary_stream = secondary_stream
+
+    def write(self, data):
+        self.primary_stream.write(data)
+        self.secondary_stream.write(data)
+
+    def flush(self):
+        self.primary_stream.flush()
+        self.secondary_stream.flush()
+
+
+def setup_logging():
+    """
+    Sets up logging to redirect stdout and stderr to 'ssher.txt'
+    in the script's directory, while also printing to the console.
+    """
+    # Get the directory of the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file_path = os.path.join(script_dir, "ssher.txt")
+
+    try:
+        # Open the log file in append mode ('a') for continuous logging
+        # buffering=1 means line-buffered, which is good for real-time viewing
+        log_file = open(log_file_path, "a", buffering=1, encoding='utf-8')
+    except IOError as e:
+        # If the log file cannot be opened, print an error and continue without file logging
+        print(f"Error: Could not open log file '{log_file_path}' for writing: {e}", file=sys.stderr)
+        return
+
+    # Store original stdout and stderr to restore them later if needed (though not implemented here)
+    # original_stdout = sys.stdout
+    # original_stderr = sys.stderr
+
+    # Create Tee objects to redirect output
+    sys.stdout = Tee(sys.stdout, log_file)
+    sys.stderr = Tee(sys.stderr, log_file)
+
+    # Add a header to the log file for each run
+    print(f"\n--- Log started at {datetime.datetime.now()} ---")
+    print(f"All output for this run will be saved to: {log_file_path}")
+
+
 def run_command(
     command: List[str], capture_output: bool = False
 ) -> Optional[str]:
     """
     Executes a shell command safely and returns its output.
+    Logs the command being executed and its stdout/stderr.
 
     Args:
         command: The command and its arguments as a list of strings.
@@ -55,43 +109,60 @@ def run_command(
     Raises:
         ScriptError: If the command returns a non-zero exit code.
     """
+    # Print the command being executed for logging
+    print(f"\n[COMMAND] Executing: {' '.join(command)}")
     try:
         process = subprocess.run(
             command,
             check=True,
             text=True,
-            capture_output=True,
+            capture_output=True, # Always capture output to log it
             encoding='utf-8'
         )
+        if process.stdout:
+            # Log standard output from the command
+            print(f"[STDOUT]\n{process.stdout.strip()}")
+        if process.stderr:
+            # Log standard error from the command, even if successful
+            print(f"[STDERR]\n{process.stderr.strip()}")
         if capture_output:
             return process.stdout.strip()
         return None
     except FileNotFoundError:
-        raise ScriptError(f"Error: Command not found: '{command[0]}'. Is it in the system's PATH?")
+        error_msg = f"Error: Command not found: '{command[0]}'. Is it in the system's PATH?"
+        print(f"❌ {error_msg}", file=sys.stderr) # Print to both console and log
+        raise ScriptError(error_msg)
     except subprocess.CalledProcessError as e:
         error_message = (
             f"Command '{' '.join(command)}' failed with return code {e.returncode}.\n"
-            f"Stderr: {e.stderr.strip()}"
+            f"STDOUT: {e.stdout.strip()}\n"
+            f"STDERR: {e.stderr.strip()}"
         )
+        print(f"❌ {error_message}", file=sys.stderr) # Print to both console and log
         raise ScriptError(error_message)
 
 
 def is_package_installed(package_name: str) -> bool:
     """Checks if a Debian package is installed."""
+    print(f"Checking if '{package_name}' is installed...")
     try:
         run_command(["dpkg-query", "-W", "-f=${Status}", package_name])
+        print(f"'{package_name}' is installed.")
         return True
     except ScriptError:
+        print(f"'{package_name}' is NOT installed.")
         return False
 
 
 def get_ubuntu_codename() -> str:
     """Gets the Ubuntu release codename for the Tailscale repository."""
+    print("Attempting to determine Ubuntu codename...")
     try:
-        return run_command(["lsb_release", "-cs"], capture_output=True)
+        codename = run_command(["lsb_release", "-cs"], capture_output=True)
+        print(f"Detected Ubuntu codename: '{codename}'.")
+        return codename
     except ScriptError as e:
         print(f"Warning: Could not determine Ubuntu codename. Falling back to 'jammy'. Error: {e}")
-        # Zorin OS 17 is based on jammy (22.04), a safe fallback.
         return "jammy"
 
 
@@ -103,13 +174,14 @@ def install_tailscale():
 
     print("🔹 Tailscale not found. Starting installation...")
     try:
-        # Add Tailscale's GPG key
+        print("Adding Tailscale's GPG key...")
         run_command([
             "curl", "-fsSL", "https://pkgs.tailscale.com/stable/ubuntu/jammy.asc",
             "-o", "/usr/share/keyrings/tailscale-archive-keyring.gpg"
         ])
+        print("Tailscale GPG key added successfully.")
 
-        # Add Tailscale repository
+        print("Adding Tailscale repository...")
         codename = get_ubuntu_codename()
         repo_list_content = (
             f"deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] "
@@ -117,7 +189,8 @@ def install_tailscale():
         )
         with open("/etc/apt/sources.list.d/tailscale.list", "w") as f:
             f.write(repo_list_content)
-        
+        print("Tailscale repository added.")
+
         # Update package lists and install
         print("Updating package lists...")
         run_command(["apt-get", "update"])
@@ -125,7 +198,7 @@ def install_tailscale():
         run_command(["apt-get", "install", "-y", "tailscale"])
         print("✅ Tailscale installed successfully.")
     except (ScriptError, IOError) as e:
-        print(f"❌ Installation failed: {e}")
+        print(f"❌ Installation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -137,17 +210,18 @@ def setup_tailscale(auth_key: str):
     print("🔹 Configuring Tailscale service...")
     try:
         run_command(["systemctl", "enable", "--now", "tailscaled"])
+        print("Tailscale daemon enabled and started.")
     except ScriptError as e:
-        print(f"❌ Failed to start or enable tailscaled service: {e}")
+        print(f"❌ Failed to start or enable tailscaled service: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Check if already authenticated and running using reliable JSON output
     try:
+        print("Checking Tailscale status...")
         status_json = run_command(["tailscale", "status", "--json"], capture_output=True)
         status = json.loads(status_json)
         if status.get("BackendState") == "Running" and status.get("Self", {}).get("Online"):
             print("✅ Tailscale is already authenticated and running.")
-            # We no longer check for or apply tags here, as they're configured with the authkey.
             return
     except (ScriptError, json.JSONDecodeError) as e:
         # This can happen if tailscaled is not fully up yet or status is not valid JSON. Continue to auth.
@@ -167,19 +241,21 @@ def setup_tailscale(auth_key: str):
         run_command(auth_command)
         print("✅ Tailscale authenticated successfully and SSH is enabled.")
     except ScriptError as e:
-        print(f"❌ Tailscale authentication and configuration failed: {e}")
-        print("\nPlease check that your auth key is valid and has not expired, and that its associated tags are correctly configured in the Tailscale Admin Console.")
+        print(f"❌ Tailscale authentication and configuration failed: {e}", file=sys.stderr)
+        print("\nPlease check that your auth key is valid and has not expired, and that its associated tags are correctly configured in the Tailscale Admin Console.", file=sys.stderr)
         sys.exit(1)
 
 
 def main():
     """Main execution function."""
+    setup_logging() # Call this first to start logging immediately
+
     if os.geteuid() != 0:
-        print("❌ This script must be run as root. Please use 'sudo'.")
+        print("❌ This script must be run as root. Please use 'sudo'.", file=sys.stderr)
         sys.exit(1)
 
     print("--- Starting Tailscale SSH Setup (Max Flexibility/Min Security) ---")
-    
+
     install_tailscale()
     setup_tailscale(TAILSCALE_AUTH_KEY)
 
