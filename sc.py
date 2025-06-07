@@ -1,75 +1,87 @@
-#!/usr/bin/env python3
-import subprocess, time, io, logging
-import requests
-from PIL import Image, UnidentifiedImageError
+import socket
+import mss
+import mss.tools
+import time
+import io
+import zlib
+import threading
 
-# configure this
-dest_url = "http://100.96.244.18:8000/frame.jpg"
-interval = 0.5   # seconds
-log_file = "sc.log"
+# --- Configuration ---
+RECEIVER_TAILSCALE_IP = '100.96.244.18' # Your PC's Tailscale IP
+RECEIVER_PORT = 12345
+FPS = 1 # Frames per second (set to 1 or 2 for a video-like experience)
+JPEG_QUALITY = 50 # JPEG quality (0-100), lower means smaller file and faster transfer
 
-def setup_logging():
-    logging.basicConfig(
-        filename=log_file,
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
+# Calculate delay for desired FPS
+DELAY_TIME = 1 / FPS
 
+def send_screen_data():
+    """
+    Connects to the receiver and continuously sends screen capture data.
+    Attempts to reconnect if the connection is lost.
+    """
+    while True: # Loop to attempt reconnection if connection drops
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            print(f"Attempting to connect to receiver at {RECEIVER_TAILSCALE_IP}:{RECEIVER_PORT}...")
+            client_socket.connect((RECEIVER_TAILSCALE_IP, RECEIVER_PORT))
+            print(f"Successfully connected to receiver.")
+        except socket.error as e:
+            print(f"Failed to connect to receiver: {e}. Retrying in 5 seconds...")
+            client_socket.close()
+            time.sleep(5)
+            continue # Try connecting again
 
-def capture_and_send():
-    # 1) grab a PNG to temp
-    try:
-        subprocess.run(
-            ["gnome-screenshot", "-f", "/tmp/frame.png"],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-    except subprocess.CalledProcessError as e:
-        logging.error(f"screenshot failed: {e.stderr.decode().strip()}")
-        return
+        with mss.mss() as sct:
+            # Capture the primary monitor (sct.monitors[1]).
+            # Adjust to sct.monitors[0] for all screens, or other index for specific monitor.
+            monitor = sct.monitors[1] 
 
-    # 2) open and re-encode as JPEG in-memory
-    try:
-        img = Image.open("/tmp/frame.png")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=75)
-        buf.seek(0)
-    except (FileNotFoundError, UnidentifiedImageError) as e:
-        logging.error(f"loading or encoding PNG failed: {e}")
-        _cleanup()
-        return
-    except Exception as e:
-        logging.error(f"JPEG encoding failed: {e}")
-        _cleanup()
-        return
+            print(f"Starting screen capture at {FPS} FPS with JPEG quality {JPEG_QUALITY}...")
+            try:
+                while True:
+                    start_time = time.time()
+                    
+                    # Capture the screen
+                    sct_img = sct.grab(monitor)
+                    
+                    # Convert to PIL Image format for JPEG compression
+                    img_pil = mss.tools.to_pil_image(sct_img)
 
-    # remove the PNG after encoding
-    _cleanup()
+                    # Convert PIL Image to JPEG bytes
+                    img_byte_arr = io.BytesIO()
+                    img_pil.save(img_byte_arr, format='JPEG', quality=JPEG_QUALITY)
+                    jpeg_bytes = img_byte_arr.getvalue()
 
-    # 3) stream via HTTP PUT
-    try:
-        resp = requests.put(dest_url, data=buf.read(), timeout=5)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logging.error(f"upload failed: {e}")
-        return
+                    # Compress with zlib on top of JPEG. This can further reduce size, especially for static screens.
+                    compressed_data = zlib.compress(jpeg_bytes)
 
+                    # Send the size of the compressed data first (4 bytes)
+                    data_size = len(compressed_data)
+                    client_socket.sendall(data_size.to_bytes(4, 'big'))
 
-def _cleanup():
-    # remove temporary files
-    try:
-        subprocess.run(["rm", "-f", "/tmp/frame.png"], check=False)
-    except Exception as e:
-        logging.warning(f"cleanup failed: {e}")
+                    # Send the actual compressed data
+                    client_socket.sendall(compressed_data)
 
+                    # Control frame rate
+                    end_time = time.time()
+                    elapsed_time = end_time - start_time
+                    if elapsed_time < DELAY_TIME:
+                        time.sleep(DELAY_TIME - elapsed_time)
 
-def main():
-    setup_logging()
-    logging.info("Starting screenshot stream")
-    while True:
-        capture_and_send()
-        time.sleep(interval)
+            except mss.exception.ScreenShotError as e:
+                print(f"Screenshot failed: {e}. Screen might be locked or no active session. Trying again...")
+                time.sleep(1) # Small pause before next capture attempt
+            except socket.error as e:
+                print(f"Socket error during send: {e}. Connection likely lost. Attempting to reconnect...")
+                client_socket.close()
+                time.sleep(2) # Wait a bit before trying to reconnect
+                break # Break inner loop to trigger outer reconnection loop
+            except Exception as e:
+                print(f"An unexpected error occurred during sending: {e}")
+                client_socket.close()
+                time.sleep(2)
+                break # Break inner loop to trigger outer reconnection loop
 
 if __name__ == "__main__":
-    main()
+    send_screen_data()
