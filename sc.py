@@ -23,40 +23,47 @@ def run_command(command_args, capture_output=False, print_output=False, suppress
     capture_output: If True, stdout and stderr are captured and returned.
     print_output: If True, stdout is printed live.
     suppress_stderr: If True, stderr is redirected to /dev/null unless command fails.
+                     If False, stderr is always captured and printed.
     """
-    # Explicitly copy the current environment to pass to the subprocess.
-    # This is CRUCIAL for graphical applications like gnome-screenshot in an SSH -X session.
-    current_env = os.environ.copy()
+    current_env = os.environ.copy() # Explicitly copy the current environment
 
     stdout_pipe = subprocess.PIPE if capture_output or print_output else None
-    stderr_pipe = subprocess.PIPE if capture_output or not suppress_stderr else subprocess.DEVNULL
+    stderr_pipe = subprocess.PIPE if capture_output or not suppress_stderr else subprocess.DEVNULL # Always capture if not suppressing or if capturing output
+
+    process = None # Initialize process outside try block
 
     try:
         process = subprocess.Popen(command_args, stdout=stdout_pipe, stderr=stderr_pipe, text=True, env=current_env)
         stdout, stderr = process.communicate() # Wait for process to complete
 
-        if print_output and stdout:
-            print(f"Command STDOUT: {stdout.strip()}")
+        # Safely strip output
+        stdout_stripped = stdout.strip() if stdout is not None else ""
+        stderr_stripped = stderr.strip() if stderr is not None else ""
 
-        if stderr:
-            # Always print stderr if command failed, or if not suppressing
-            if process.returncode != 0 or not suppress_stderr:
-                print(f"Command STDERR: {stderr.strip()}")
-            elif stdout: # If command succeeded but had unexpected stderr, print it
-                print(f"Command unexpectedly produced STDERR: {stderr.strip()}")
+        if print_output and stdout_stripped:
+            print(f"Command STDOUT: {stdout_stripped}")
 
         if process.returncode != 0:
+            # If command failed, always print stderr (it's crucial for debugging)
+            if stderr_stripped:
+                print(f"COMMAND FAILED (Exit Code {process.returncode}): {' '.join(command_args)}")
+                print(f"STDOUT: {stdout_stripped}")
+                print(f"STDERR: {stderr_stripped}")
             raise subprocess.CalledProcessError(process.returncode, command_args, stdout, stderr)
+        else: # Command succeeded
+            if stderr_stripped and suppress_stderr: # If we suppressed but still got stderr
+                print(f"Command unexpectedly produced STDERR: {stderr_stripped}")
+            elif stderr_stripped and not suppress_stderr: # If we explicitly wanted to see stderr
+                print(f"Command STDERR: {stderr_stripped}")
 
-        return stdout.strip() if capture_output else True
+
+        return stdout_stripped if capture_output else True
 
     except FileNotFoundError:
         print(f"ERROR: Command '{command_args[0]}' not found. Make sure it's installed and in your PATH.")
         return False
     except subprocess.CalledProcessError as e:
-        print(f"COMMAND FAILED (Exit Code {e.returncode}): {' '.join(e.cmd)}")
-        print(f"STDOUT: {e.stdout.strip()}")
-        print(f"STDERR: {e.stderr.strip()}")
+        # Error details already printed in the `if process.returncode != 0:` block
         return False
     except Exception as e:
         print(f"AN UNEXPECTED ERROR OCCURRED during '{' '.join(command_args)}': {e}")
@@ -100,8 +107,9 @@ def send_screen_data():
         ]
         
         print(f"Capturing screen to {FULL_PATH} with gnome-screenshot...")
-        # Suppress stderr for gnome-screenshot as it can be noisy even when successful.
-        capture_success = run_command(screenshot_command_args, suppress_stderr=True)
+        # *** TEMPORARY DEBUGGING CHANGE: Set suppress_stderr=False for gnome-screenshot ***
+        # This will make gnome-screenshot's error output visible to us.
+        capture_success = run_command(screenshot_command_args, suppress_stderr=False) 
 
         if capture_success and os.path.exists(FULL_PATH) and os.path.getsize(FULL_PATH) > 0:
             print("Screenshot taken successfully.")
@@ -124,11 +132,8 @@ def send_screen_data():
             else:
                 print("Failed to send image via curl.")
         else:
-            print("Screenshot capture failed. This likely means:")
-            print("  - Michael is not logged into his graphical desktop.")
-            print("  - Your SSH session did not have X11 forwarding enabled/working ('ssh -X' was not used or failed).")
-            print("  - The screen might be locked.")
-            print("Please ensure Michael is logged in and your SSH -X setup is correct.")
+            print("Screenshot capture failed. Check the errors above for details.")
+            print("Common causes: Michael not logged into GUI, SSH -X not working, screen locked.")
             
         # 3. Delete the temporary screenshot file
         if os.path.exists(FULL_PATH):
