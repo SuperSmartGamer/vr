@@ -200,7 +200,7 @@ def periodic_task():
                 #upload_to_r2("thing.txt")
                 #upload_to_r2("console.log")
                 wipe_file("thing.txt")
-                wipe_file("console.log")
+                #wipe_file("console.log")
                 # Your periodic work here:
                 print("Periodic task running at", time.strftime("%Y-%m-%d %H:%M:%S"))
             except Exception:
