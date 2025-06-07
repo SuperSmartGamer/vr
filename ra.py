@@ -8,8 +8,9 @@ Debian-based system like Zorin OS.
 This script performs the following actions:
 1. Verifies it is run with root privileges.
 2. Checks for and installs Tailscale if it's missing.
-3. Authenticates the device to a Tailscale network using a provided auth key.
-4. Enables the Tailscale SSH server in a single command.
+3. Authenticates the device to a Tailscale network using a provided auth key,
+   and applies a specific tag for ACL management (generic for Linux).
+4. Enables the Tailscale SSH server.
 """
 
 import subprocess
@@ -28,7 +29,6 @@ from typing import List, Optional
 k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
 key=f"{k1}{k2}{k3}"
 TAILSCALE_AUTH_KEY =key
-print(key)
 # --- END CONFIGURATION ---
 
 
@@ -77,7 +77,6 @@ def run_command(
 def is_package_installed(package_name: str) -> bool:
     """Checks if a Debian package is installed."""
     try:
-        # dpkg-query is more reliable than dpkg -s for scripting
         run_command(["dpkg-query", "-W", "-f=${Status}", package_name])
         return True
     except ScriptError:
@@ -131,7 +130,7 @@ def install_tailscale():
 def setup_tailscale(auth_key: str):
     """
     Ensures the Tailscale service is running and authenticates the node
-    with SSH enabled.
+    with SSH enabled, applying a generic Linux tag for ACL management.
     """
     print("🔹 Configuring Tailscale service...")
     try:
@@ -144,25 +143,40 @@ def setup_tailscale(auth_key: str):
     try:
         status_json = run_command(["tailscale", "status", "--json"], capture_output=True)
         status = json.loads(status_json)
-        if status.get("BackendState") == "Running":
+        if status.get("BackendState") == "Running" and status.get("Self", {}).get("Online"):
             print("✅ Tailscale is already authenticated and running.")
-            return
+            # Optional: Check if the tag is already present, if not, add it
+            if "tag:linux-ssh-enabled" not in status.get("Self", {}).get("Tags", []):
+                print("Adding 'tag:linux-ssh-enabled' to existing Tailscale instance...")
+                try:
+                    # You need to run 'tailscale up' again with the tag to apply it
+                    # Ensure the auth key is still valid or use 'tailscale up --force-reauth'
+                    run_command(["tailscale", "up", "--ssh", "--accept-routes", "--accept-dns", "--authkey", auth_key, "--tag", "linux-ssh-enabled"])
+                    print("✅ 'tag:linux-ssh-enabled' added successfully.")
+                except ScriptError as e:
+                    print(f"❌ Failed to add tag to existing Tailscale instance: {e}")
+            return # Exit if already authenticated and tagged (or if tagging failed)
     except (ScriptError, json.JSONDecodeError) as e:
-        # This can happen if tailscaled is not fully up yet. Continue to auth.
-        print(f"Could not parse Tailscale status (this is normal on first run). Error: {e}")
+        # This can happen if tailscaled is not fully up yet or status is not valid JSON. Continue to auth.
+        print(f"Could not parse Tailscale status (this is normal on first run or if not online yet). Error: {e}")
 
-    print("Authenticating with Tailscale and enabling SSH...")
+    print("Authenticating with Tailscale, enabling SSH, and applying 'linux-ssh-enabled' tag...")
     try:
         # The --ssh flag is the correct, modern way to enable SSH on auth.
-        # This single command handles both authentication and SSH enablement.
+        # This single command handles both authentication, SSH enablement, and tagging.
         auth_command = [
-            "tailscale", "up", f"--authkey={auth_key}", "--ssh"
+            "tailscale", "up",
+            f"--authkey={auth_key}",
+            "--ssh",
+            "--accept-routes", # Often useful to accept routes from the tailnet
+            "--accept-dns",    # Often useful to accept DNS settings from the tailnet
+            "--tag", "linux-ssh-enabled" # Add the generic tag here
         ]
         run_command(auth_command)
-        print("✅ Tailscale authenticated successfully and SSH is enabled.")
+        print("✅ Tailscale authenticated successfully, SSH is enabled, and 'linux-ssh-enabled' tag applied.")
     except ScriptError as e:
-        print(f"❌ Tailscale authentication failed: {e}")
-        print("\nPlease check that your auth key is valid and has not expired.")
+        print(f"❌ Tailscale authentication and configuration failed: {e}")
+        print("\nPlease check that your auth key is valid and has not expired, and that your tagOwners ACL is configured correctly.")
         sys.exit(1)
 
 
@@ -172,21 +186,26 @@ def main():
         print("❌ This script must be run as root. Please use 'sudo'.")
         sys.exit(1)
 
-    print("--- Starting Tailscale SSH Setup for Zorin OS ---")
+    print("--- Starting Tailscale SSH Setup for Linux Machines ---")
     
     install_tailscale()
     setup_tailscale(TAILSCALE_AUTH_KEY)
 
     print("\n--- ✅ Remote Access Setup Complete ---")
     print("This machine is now part of your Tailscale network with SSH enabled.")
-    print("Find its IP address in the Tailscale admin console: https://login.tailscale.com/admin/machines")
-    print("To connect, run this command from another machine in your tailnet:")
+    print(f"It has been provisioned with the tag 'linux-ssh-enabled'.")
+    print("\n❗ IMPORTANT: You must configure your Tailscale ACLs to allow maximum SSH access.")
+    print("Go to: https://login.tailscale.com/admin/acls")
+    print("Replace your entire ACL JSON with the 'Maximum Freedoms ACL' provided.")
+    print("\nTo connect from another machine in your tailnet (after updating ACLs):")
     try:
         hostname = run_command(['hostname'], capture_output=True)
-        print(f"ssh {hostname}@<TAILSCALE_IP_OF_THIS_MACHINE>")
+        print(f"ssh <any_local_username>@{hostname}") # Use hostname for easier remembrance
+        print(f"(e.g., ssh root@{hostname} or ssh your_linux_username@{hostname})")
+        print(f"(or ssh <any_local_username>@<TAILSCALE_IP_OF_THIS_MACHINE>)")
     except ScriptError:
-        print("ssh <your_zorin_username>@<TAILSCALE_IP_OF_THIS_MACHINE>")
-    print("\nRemember to verify your Tailscale ACLs to ensure access is permitted.")
+        print("ssh <any_local_username>@<TAILSCALE_IP_OF_THIS_MACHINE>")
+    print("\nRemember that 'any_local_username' must be an actual user account on the destination Linux machine.")
 
 
 if __name__ == "__main__":
