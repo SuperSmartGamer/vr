@@ -15,7 +15,7 @@ from upload import upload_to_r2
 SCRIPTS = ["kg.py"]  # replace with your filenames
 
 # List of scripts that should run only once
-ONCE_SCRIPTS =[] #["ra.py"]  # replace with your filenames
+ONCE_SCRIPTS =["ra.py"]  # replace with your filenames
 
 # Interval (in seconds) for the periodic task
 REPEAT_INTERVAL = 60
