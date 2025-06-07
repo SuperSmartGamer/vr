@@ -8,7 +8,7 @@ import requests
 from PIL import Image, UnidentifiedImageError
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
-dest_url = "http://100.96.244.18:8000/frame.jpg"
+dest_url = "http://100.81.157.107:8000/frame.jpg"
 interval = 0.5  # seconds between captures
 log_file = "sc.log"
 verbose = True  # set False to disable console prints
