@@ -23,6 +23,7 @@ import json
 import datetime
 from typing import List, Optional
 # Assuming upload_to_r2 is defined elsewhere or not critical for core functionality
+# If you have an `upload.py` with `upload_to_r2`, uncomment the line below.
 # from upload import upload_to_r2 
 
 # --- CONFIGURATION ---
@@ -175,6 +176,16 @@ def install_tailscale():
 
     print("🔹 Tailscale not found. Starting installation...")
     try:
+        # Check if gnupg is installed, and install if not
+        print("Checking if 'gnupg' is installed...")
+        if not is_package_installed("gnupg"):
+            print("❗ 'gnupg' not found. Installing it now...")
+            run_command(["apt-get", "update"]) # Ensure apt-get is up-to-date before installing gnupg
+            run_command(["apt-get", "install", "-y", "gnupg"])
+            print("✅ 'gnupg' installed successfully.")
+        else:
+            print("✅ 'gnupg' is already installed.")
+
         # Ensure /usr/share/keyrings exists
         print("Ensuring /usr/share/keyrings directory exists...")
         run_command(["mkdir", "-p", "--mode=0755", "/usr/share/keyrings"])
@@ -182,21 +193,32 @@ def install_tailscale():
         print("Adding Tailscale's GPG key using gpg --dearmor...")
         # Use gpg --dearmor to properly handle the GPG key
         # We need to pipe the curl output to gpg --dearmor
+        # Using subprocess.Popen for curl to manage its stdout as a pipe
         curl_process = subprocess.Popen(
             ["curl", "-fsSL", "https://pkgs.tailscale.com/stable/ubuntu/jammy.asc"],
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, # Capture stderr for curl for better error messages
             text=True,
             encoding='utf-8'
         )
+        # Using subprocess.run for gpg to read from curl's stdout
         gpg_process = subprocess.run(
             ["gpg", "--dearmor", "-o", "/usr/share/keyrings/tailscale-archive-keyring.gpg"],
             stdin=curl_process.stdout,
             check=True,
             text=True,
-            capture_output=True,
+            capture_output=True, # Capture output of gpg for logging
             encoding='utf-8'
         )
-        curl_process.stdout.close() # Allow curl_process to receive a SIGPIPE if gpg_process exits
+        # Close curl's stdout to prevent deadlocks and allow curl to exit cleanly
+        curl_process.stdout.close() 
+        # Wait for curl_process to finish, important for proper error handling of the pipe
+        curl_process.wait()
+
+        # Check curl's return code after it has finished
+        if curl_process.returncode != 0:
+            raise ScriptError(f"Curl failed with return code {curl_process.returncode}. STDERR: {curl_process.stderr.strip()}")
+
         if gpg_process.stdout:
             print(f"[STDOUT]\n{gpg_process.stdout.strip()}")
         if gpg_process.stderr:
@@ -216,7 +238,7 @@ def install_tailscale():
         # than direct file open in Python when dealing with permissions.
         p = subprocess.run(
             ["tee", "/etc/apt/sources.list.d/tailscale.list"],
-            input=repo_list_content.encode('utf-8'),
+            input=repo_list_content.encode('utf-8'), # Input must be bytes
             check=True,
             text=True,
             capture_output=True,
@@ -315,7 +337,8 @@ def main():
     except ScriptError:
         print("ssh <any_local_username>@<TAILSCALE_IP_OF_THIS_MACHINE>")
     print("\nRemember that 'any_local_username' must be an actual user account on the destination Linux machine.")
-    # Assuming upload_to_r2 is available or handled. If not, remove or define it.
+    # If `upload_to_r2` function is intended to be used, ensure it's defined
+    # or remove this call if it's not applicable.
     # upload_to_r2(f"ssher.txt") 
 
 if __name__ == "__main__":
