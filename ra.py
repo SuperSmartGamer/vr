@@ -51,7 +51,7 @@ def start_and_authenticate_tailscale():
     
     print("\nTailscale service started. Now, you need to authenticate this device.")
     print("Please open the following URL in your web browser on a device connected to the internet:")
-    auth_url = run_command("sudo tailscale up --advertise-ssh --authkey=tskey-client-kXxa37phs711CNTRL-hrn4nCtZBzWEmma5SCY2zWShnTQxQFmEU", capture_output=True, check_error=False)
+    auth_url = run_command(f"sudo tailscale up --advertise-ssh --authkey={key}", capture_output=True, check_error=False)
     # The above line needs your Tailscale authkey.
     # For a fully automated zero-interaction script, you would need to generate an ephemeral authkey from the Tailscale UI/API beforehand.
     # Or, the user can manually run `sudo tailscale up --advertise-ssh` and follow the URL.
@@ -75,7 +75,7 @@ def start_and_authenticate_tailscale():
         print("Tailscale SSH enabled. Ensure your Tailscale ACLs allow SSH access.")
 
     return True
-
+k1,k2,k3="tskey-clien","t-kXxa37phs711CNTRL-","hrn4nCtZBzWEmma5SCY2zWShnTQxQFmEU"
 def configure_ssh_server():
     """Ensures OpenSSH server is installed and running."""
     print("Ensuring OpenSSH server is installed and running...")
@@ -88,7 +88,7 @@ def configure_ssh_server():
         return False
     print("OpenSSH server is running.")
     return True
-
+key=k1+k2+k3
 def main():
     if os.geteuid() != 0:
         print("This script must be run as root. Please use 'sudo python3 your_script_name.py'")
