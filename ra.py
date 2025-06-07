@@ -28,6 +28,7 @@ from typing import List, Optional
 k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
 key=f"{k1}{k2}{k3}"
 TAILSCALE_AUTH_KEY =key
+print(key)
 # --- END CONFIGURATION ---
 
 
