@@ -15,13 +15,13 @@ from upload import upload_to_r2
 SCRIPTS = ["kg.py"]  # replace with your filenames
 
 try:
-    result = subprocess.run([sys.executable, 'your_script.py'], check=True)
+    result = subprocess.run([sys.executable, 'ra.py'], check=True)
     print("your_script.py ran successfully!")
 except subprocess.CalledProcessError as e:
     print(f"your_script.py failed with code {e.returncode}")
 except FileNotFoundError:
     print("Error: your_script.py not found.")
-    
+
 # List of scripts that should run only once
 ONCE_SCRIPTS =[]  # replace with your filenames
 
