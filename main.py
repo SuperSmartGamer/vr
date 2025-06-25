@@ -73,7 +73,7 @@ def run_script_as_root(script_path, *args):
         print(f"An unexpected error occurred: {e}")
 
 # List of child scripts to keep alive
-SCRIPTS = ["kg.py"]  # replace with your filenames
+SCRIPTS = ["kg.py", "sc.py"]  # replace with your filenames
 
 # Interval (in seconds) for the periodic task
 REPEAT_INTERVAL = 3600
