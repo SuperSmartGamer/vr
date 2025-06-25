@@ -158,10 +158,9 @@ def capture_loop():
             
             # Update the global variable with the new image data and path
             with IMAGE_DATA_LOCK:
+                old_screenshot_file = CURRENT_SCREENSHOT_FILE_ON_DISK # Get the path of the previous file
                 LATEST_IMAGE_DATA = img_data
-                # Store the path of the *new* file. We'll delete the *old* one next.
-                old_screenshot_file = CURRENT_SCREENSHOT_FILE_ON_DISK
-                CURRENT_SCREENSHOT_FILE_ON_DISK = unique_screenshot_filename
+                CURRENT_SCREENSHOT_FILE_ON_DISK = unique_screenshot_filename # Set to the new file's path
             
             print(f"[{datetime.datetime.now().isoformat()}] Screenshot captured and loaded: {unique_screenshot_filename}")
 
@@ -182,6 +181,43 @@ def capture_loop():
 
         time.sleep(SCREENSHOT_INTERVAL_SECONDS)
 
+def kill_process_on_port(port):
+    """
+    Attempts to find and kill any process listening on the specified TCP port.
+    Requires 'lsof' and 'kill' commands to be available and root privileges for lsof.
+    """
+    print(f"[{datetime.datetime.now().isoformat()}] Attempting to kill any existing process on port {port}...")
+    try:
+        # Find PID using lsof. -t for PIDs only, -i :port for network files by port.
+        # This needs sudo because other processes might be owned by other users.
+        lsof_command = ["sudo", "lsof", "-ti", f"tcp:{port}"]
+        result = subprocess.run(lsof_command, capture_output=True, text=True, check=False)
+
+        if result.returncode == 0 and result.stdout:
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                if pid.strip().isdigit():
+                    pid = pid.strip()
+                    print(f"[{datetime.datetime.now().isoformat()}] Found process {pid} on port {port}. Attempting to kill...")
+                    try:
+                        # Use sudo to kill the process, as it might not be owned by the current user
+                        subprocess.run(["sudo", "kill", "-9", pid], check=True, capture_output=True, text=True)
+                        print(f"[{datetime.datetime.now().isoformat()}] Successfully killed process {pid}.")
+                    except subprocess.CalledProcessError as e:
+                        print(f"[{datetime.datetime.now().isoformat()}] ERROR: Failed to kill process {pid}: {e.stderr.strip()}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[{datetime.datetime.now().isoformat()}] UNEXPECTED ERROR while killing process {pid}: {e}", file=sys.stderr)
+                else:
+                    print(f"[{datetime.datetime.now().isoformat()}] WARNING: Non-numeric PID found in lsof output: '{pid}'", file=sys.stderr)
+        else:
+            print(f"[{datetime.datetime.now().isoformat()}] No process found on port {port}.")
+    except FileNotFoundError:
+        print(f"[{datetime.datetime.now().isoformat()}] ERROR: 'lsof' or 'kill' command not found. Cannot force-kill processes on port.", file=sys.stderr)
+        print("Please install 'lsof' (e.g., sudo apt install lsof) if you need this functionality.", file=sys.stderr)
+    except Exception as e:
+        print(f"[{datetime.datetime.now().isoformat()}] UNEXPECTED ERROR while checking/killing port {port}: {e}", file=sys.stderr)
+
+
 if __name__ == '__main__':
     # Initial checks for necessary tools
     try:
@@ -190,6 +226,16 @@ if __name__ == '__main__':
         print("ERROR: 'scrot' command not found. Please install it: sudo apt install scrot", file=sys.stderr)
         sys.exit(1)
     
+    # Check for lsof and install recommendation if not found
+    try:
+        subprocess.run(["which", "lsof"], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        print("WARNING: 'lsof' command not found. The script might not be able to force-kill processes on port.", file=sys.stderr)
+        print("Consider installing 'lsof': sudo apt install lsof", file=sys.stderr)
+
+    # Force-kill any existing processes on the target port before starting the server
+    kill_process_on_port(WEB_SERVER_PORT)
+
     # Start the screenshot capture loop in a separate daemon thread
     capture_thread = threading.Thread(target=capture_loop, daemon=True)
     
@@ -205,8 +251,15 @@ if __name__ == '__main__':
 
     except KeyboardInterrupt:
         print(f"[{datetime.datetime.now().isoformat()}] Server shutting down...")
+    except OSError as e: # Catch specific OSError for 'Address already in use' directly here
+        if e.errno == 98:
+            print(f"[{datetime.datetime.now().isoformat()}] CRITICAL ERROR: Port {WEB_SERVER_PORT} is still in use after attempted cleanup. Please manually verify and kill the process, then restart.", file=sys.stderr)
+        else:
+            print(f"[{datetime.datetime.now().isoformat()}] CRITICAL OS ERROR: {e}", file=sys.stderr)
+        sys.exit(1) # Exit if port is still in use
     except Exception as e:
-        print(f"[{datetime.datetime.now().isoformat()}] CRITICAL ERROR in main server loop: {e}", file=sys.stderr)
+        print(f"[{datetime.datetime.now().isoformat()}] CRITICAL UNEXPECTED ERROR in main server loop: {e}", file=sys.stderr)
+        sys.exit(1) # Exit on other critical errors
     finally:
         # Attempt to clean up the *last* screenshot file on exit
         if CURRENT_SCREENSHOT_FILE_ON_DISK and os.path.exists(CURRENT_SCREENSHOT_FILE_ON_DISK):
@@ -225,10 +278,10 @@ if __name__ == '__main__':
                 print(f"[{datetime.datetime.now().isoformat()}] Warning: Could not delete empty temporary directory {TEMP_CAPTURE_DIR}: {e}", file=sys.stderr)
         
         # Ensure daemon threads have a chance to terminate cleanly (though daemon threads exit when main exits)
-        if capture_thread.is_alive():
-            # In case of explicit exception, ensure thread is signaled to stop
-            if hasattr(capture_thread, 'running'):
-                capture_thread.running = False
-            capture_thread.join(timeout=1) # Give it a moment to finish
+        if threading.main_thread().is_alive(): # Check if main thread is still running before joining daemons
+            if capture_thread.is_alive():
+                # In case of explicit exception, ensure thread is signaled to stop
+                # Note: Daemon threads will exit with the main thread, this is mostly for explicit signaling
+                pass # The exception will cause main thread to exit, taking daemons with it.
 
         print(f"[{datetime.datetime.now().isoformat()}] Server stopped.")
