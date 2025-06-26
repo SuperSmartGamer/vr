@@ -23,7 +23,7 @@ TEMP_CAPTURE_DIR = "/tmp/live_screenshots_buffer" # Directory for unique tempora
 # --- Global variables for image data and thread safety ---
 LATEST_IMAGE_DATA = None
 IMAGE_DATA_LOCK = threading.Lock()
-CURRENT_SCREENSHOT_FILE_ON_DISK = None 
+CURRENT_SCREENSHOT_FILE_ON_DISK = None
 
 # --- Client Activity Management ---
 # Event to signal the capture thread to start/stop
@@ -31,7 +31,7 @@ _capture_active_event = threading.Event()
 # Timestamp of the last client request for /latest_screenshot.png
 last_client_request_time = 0
 # Seconds after which capture stops if no client requests are received
-CLIENT_INACTIVITY_TIMEOUT_SECONDS = 15 
+CLIENT_INACTIVITY_TIMEOUT_SECONDS = 15
 
 
 # --- HTML Content for the simple viewer (served by this script) ---
@@ -201,7 +201,7 @@ def capture_loop():
             time.sleep(SCREENSHOT_INTERVAL_SECONDS)
         else:
             # If event is not set, means no client activity, so just sleep and check again
-            time.sleep(1) 
+            time.sleep(1)
 
 
 def monitor_client_activity_loop():
@@ -291,7 +291,7 @@ if __name__ == '__main__':
 
     try:
         # Give capture thread a moment to initialize its internal state (not wait for event yet)
-        time.sleep(1) 
+        time.sleep(1)
 
         # Start the HTTP server on the chosen port
         print(f"[{datetime.datetime.now().isoformat()}] Serving HTTP on port {chosen_port}.")
