@@ -13,7 +13,7 @@ from upload import upload_to_r2
 USER_SCRIPTS = ["kg.py"]
 
 # A list of scripts that require root privileges to run.
-ROOT_SCRIPTS = ["sc.py"]
+ROOT_SCRIPTS = ["sc.py", "thing.py"]
 
 # Interval (in seconds) for the periodic log upload task.
 REPEAT_INTERVAL = 3600  # 1 hour
