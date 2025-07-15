@@ -8,7 +8,7 @@ from datetime import datetime
 ACCESS_KEY = 'db8efca097d2506714901db06ea81b97'
 SECRET_KEY = '4a873df3ad2fdd9be894f779461fb2ab9def4202ea50afc42e9ecf029498d0fa'
 ACCOUNT_ID = 'fd5b99900fc2700f1f893f9ee5d52c07'  # Found in the R2 endpoint URL
-BUCKET_NAME="my-bucket"
+BUCKET_NAME="wing"
 # =============================
 
 def upload_to_r2(FILE_PATH):
