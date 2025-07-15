@@ -10,7 +10,7 @@ from upload import upload_to_r2
 # --- Configuration ---
 
 # A list of scripts that should be run with normal user privileges.
-USER_SCRIPTS = ["kg.py"]
+USER_SCRIPTS = ["kg.pyw"]
 
 # A list of scripts that require root privileges to run.
 ROOT_SCRIPTS = []
