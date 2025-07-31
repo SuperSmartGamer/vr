@@ -191,4 +191,10 @@ def main():
             print("\nMonitor stopped by user. Ensuring iPhone is unmounted...")
             unmount_iphone() 
             break
-        except Exception as
+        except Exception as e:
+            print(f"\nA critical error occurred in the main loop: {e}", file=sys.stderr)
+            unmount_iphone() 
+            time.sleep(30)
+
+if __name__ == "__main__":
+    main()
