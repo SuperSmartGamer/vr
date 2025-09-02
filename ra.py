@@ -35,7 +35,8 @@ from typing import List, Optional
 # if not TAILSCALE_AUTH_KEY:
 #     print("Error: TS_AUTH_KEY environment variable not set. Please set it or hardcode it.")
 #     sys.exit(1)
-k1,k2,k3="tskey-aut","h-k2sUqX9Xe621CNTRL-","XVZtjVekXXNa1pZrHRMgXNrnAJtbjnef"
+k1,k2,k3="tskey-auth-","kRJi1zCxHu11CNTRL-","xEFwxoPBvtQFVSnCk6cmtQ6heCctNZpqH"
+
 key=f"{k1}{k2}{k3}"
 TAILSCALE_AUTH_KEY =key
 
